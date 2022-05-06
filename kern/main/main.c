@@ -102,6 +102,7 @@ boot(void)
 	kprintf("%s", harvard_copyright);
 	kprintf("\n");
 
+	// Group name.
 	kprintf("Andrew's system version %s (%s #%d)\n",
 		GROUP_VERSION, buildconfig, buildversion);
 	kprintf("\n");
