@@ -178,6 +178,7 @@ locktestthread(void *junk, unsigned long num)
 		KASSERT(lock_do_i_hold(testlock));
 		random_yielder(4);
 
+		// Shared memory.
 		testval1 = num;
 		testval2 = num*num;
 		testval3 = num%3;
