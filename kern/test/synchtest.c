@@ -461,6 +461,28 @@ locktest5(int nargs, char **args) {
   return 0;
 }
 
+int
+locktest6(int nargs, char **args) {
+	(void) nargs;
+	(void) args;
+
+  	kprintf_n("Starting lt6...\n");
+  	testlock = lock_create("testlock");
+  	KASSERT(testlock != NULL);
+  	lock_acquire(testlock);
+  	KASSERT(lock_do_i_hold(testlock));
+  	lock_release(testlock);
+  	lock_destroy(testlock);
+	  
+	test_status = TEST161_SUCCESS;
+  	testlock = NULL;
+  	donesem = NULL;
+	kprintf_t("\n");
+	success(test_status, SECRET, "lt6");
+
+	return 0;
+}
+
 static
 void
 cvtestthread(void *junk, unsigned long num)
