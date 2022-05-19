@@ -305,3 +305,34 @@ cv_broadcast(struct cv *cv, struct lock *lock)
 	wchan_wakeall(cv->cv_wchan, &cv->cv_spinlock);
 	spinlock_release(&cv->cv_spinlock);	
 }
+
+struct rwlock * rwlock_create(const char *name)
+{
+	(void)name;
+	return NULL;
+}
+
+void rwlock_destroy(struct rwlock *lock)
+{
+	(void)lock;
+}
+
+void rwlock_acquire_read(struct rwlock *lock)
+{
+	(void)lock;
+}
+
+void rwlock_release_read(struct rwlock *lock)
+{
+	(void)lock;
+}
+
+void rwlock_acquire_write(struct rwlock *lock)
+{
+	(void)lock;
+}
+
+void rwlock_release_write(struct rwlock *lock)
+{
+	(void)lock;
+}
