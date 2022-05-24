@@ -24,6 +24,7 @@ static bool test_status = TEST161_FAIL;
 struct spinlock status_lock;
 static struct semaphore *start_sem;
 static struct semaphore *stop_sem;
+static struct semaphore *join_sem[16];
 
 // Shared memory.
 static volatile unsigned long shared_value = 0;
@@ -61,6 +62,21 @@ fast_writer(void *unused, unsigned long write_value)
     shared_value = write_value;
     rwlock_release_write(testrwlock);
     V(stop_sem);
+}
+
+static
+void
+writer_reader(void *unused, unsigned long thread_num)
+{
+    (void)unused;
+    //rwlock_acquire_write(testrwlock);
+    shared_value = thread_num;
+    for (int i = 0; i < 100; i++) {
+        random_yielder(4);
+        failif(shared_value != thread_num);
+    }
+    //rwlock_release_write(testrwlock);
+    V(join_sem[thread_num]);
 }
 
 // Tests can create and destroy rwlock.
@@ -175,9 +191,48 @@ int rwtest4(int nargs, char **args) {
     return 0;
 }
 
+// Tests write collisions do not occur.
 int rwtest5(int nargs, char **args) {
-    (void)nargs;
-    (void)args;
+
+	(void)nargs;
+	(void)args;
+    int result;
+    const int WRITERS = 16;
+
+    kprintf_n("Starting rwt5...\n");
+
+    // Shared memory.
+    shared_value = 0;
+
+    test_status = TEST161_SUCCESS;
+	spinlock_init(&status_lock);  // supports failif().
+    for (int i = 0; i < WRITERS; i++) {
+        join_sem[i] = sem_create("join_sem", 0);
+        KASSERT(join_sem[i] != NULL);
+    }
+
+    testrwlock = rwlock_create("testrwlock");
+    KASSERT(testrwlock != NULL);
+    for (int i = 0; i < WRITERS; i++) {
+        // Expected value to write/read.
+		result = thread_fork("writer_reader", NULL, writer_reader, NULL, i);
+		if (result) {   
+			panic("rwt5: thread_fork failed: %s\n", strerror(result));
+		}
+    }
+    // Waits for all writers to finish.
+    for (int i = 0; i < WRITERS; i++) {
+        P(join_sem[i]);
+    }  
+
+    // Threads can veto via test_status global.
+    success(test_status, SECRET, "rwt5");
+    rwlock_destroy(testrwlock);
+    testrwlock = NULL;
+    for (int i = 0; i < WRITERS; i++) {
+        sem_destroy(join_sem[i]);
+        join_sem[i] = NULL;
+    }
     return 0;
 }
 
