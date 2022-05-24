@@ -74,6 +74,8 @@ int rwtest2(int, char **);
 int rwtest3(int, char **);
 int rwtest4(int, char **);
 int rwtest5(int, char **);
+int rwtest6(int, char **);
+int rwtest7(int, char **);
 
 /* semaphore unit tests */
 int semu1(int, char **);
