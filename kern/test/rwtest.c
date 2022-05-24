@@ -20,168 +20,205 @@
 #define NTHREADS    24
 
 static struct rwlock *testrwlock = NULL;
-
-struct spinlock status_lock;
 static bool test_status = TEST161_FAIL;
+struct spinlock status_lock;
+static struct semaphore *start_sem;
+static struct semaphore *stop_sem;
+
+// Shared memory.
+static volatile unsigned long shared_value = 0;
 
 
-int rwtest(int nargs, char **args) {
-
-	(void)nargs;
-	(void)args;
-
-	kprintf_n("Starting  rwt1...\n");
-    testrwlock = rwlock_create("testrwlock");
-    if(testrwlock == NULL) {
-        panic("rwt1: rwlock_create failed!");
-    }
-
-	spinlock_init(&status_lock);
-
-    kprintf_n("This shoud panic on success!");
-    rwlock_release_read(testrwlock);
-
-	rwlock_destroy(testrwlock);
-	rwlock_destroy(testrwlock);
-    testrwlock = NULL;
-
-	kprintf_t("\n");
-	success(test_status, SECRET, "rwt1");
-
-	return 0;
+static
+bool
+failif(bool condition) {
+	if (condition) {
+		spinlock_acquire(&status_lock);
+		test_status = TEST161_FAIL;
+		spinlock_release(&status_lock);
+	}
+	return condition;
 }
 
+static
+void
+slow_reader(void *unused, unsigned long expected_value)
+{
+    (void)unused;
+    rwlock_acquire_read(testrwlock);
+    P(start_sem);
+    random_yielder(4);
+    failif(shared_value != expected_value);
+    rwlock_release_read(testrwlock);
+}
+
+static
+void
+fast_writer(void *unused, unsigned long write_value)
+{
+    (void)unused;
+    rwlock_acquire_write(testrwlock);
+    shared_value = write_value;
+    rwlock_release_write(testrwlock);
+    V(stop_sem);
+}
+
+// Tests can create and destroy rwlock.
+int rwtest(int nargs, char **args) {
+    (void)nargs;
+    (void)args;
+
+    kprintf_n("Starting rwt1...\n");
+
+    for (int i = 0; i < CREATELOOPS; i++) {
+        testrwlock = rwlock_create("testrwlock");
+        KASSERT(testrwlock != NULL);
+        rwlock_destroy(testrwlock);
+    }
+
+    success(TEST161_SUCCESS, SECRET, "rwt1");
+    testrwlock = NULL;
+    return 0;
+}
+
+// Tests if panics correctly when releasing unheld read lock.
 int rwtest2(int nargs, char **args) {
 
 	(void)nargs;
 	(void)args;
-    int i =0;
 
     kprintf_n("Starting rwt2...\n");
+    kprintf_n("This test panics on success!\n");
 
-    test_status = TEST161_SUCCESS;
-
-    for (i=0; i<CREATELOOPS; i++) {
-        testrwlock = rwlock_create("testlock");
-        if (testrwlock == NULL) {
-            panic("rwt2: rwlock_create failed\n");
-        }
-        if (i != CREATELOOPS - 1) {
-            rwlock_destroy(testrwlock);
-        }
-    }
-
-    for (i=0; i<NTHREADS; i++) {
-        kprintf_t(".");
-        rwlock_acquire_read(testrwlock);
-        rwlock_release_read(testrwlock);
-        rwlock_acquire_write(testrwlock);
-        rwlock_release_write(testrwlock);
-    }
-
-    success(test_status, SECRET, "rwt2");
-
+    testrwlock = rwlock_create("testrwlock");
+    KASSERT(testrwlock != NULL);
+    rwlock_release_read(testrwlock);
+    
+    success(TEST161_FAIL, SECRET, "rwt2");
     rwlock_destroy(testrwlock);
     testrwlock = NULL;
 
     return 0;
 }
 
+// Tests if panics correctly when releasing unheld write lock.
 int rwtest3(int nargs, char **args) {
 
-    (void)nargs;
-    (void)args;
-    int i =0;
+	(void)nargs;
+	(void)args;
 
     kprintf_n("Starting rwt3...\n");
+    kprintf_n("This test panics on success!\n");
 
-    test_status = TEST161_SUCCESS;
-
-    for (i=0; i<CREATELOOPS; i++) {
-        testrwlock = rwlock_create("testlock");
-        if (testrwlock == NULL) {
-            panic("rwt3: rwlock_create failed\n");
-        }
-        if (i != CREATELOOPS - 1) {
-            rwlock_destroy(testrwlock);
-        }
-    }
-
-    for (i=0; i<NTHREADS; i++) {
-        kprintf_t(".");
-        rwlock_acquire_read(testrwlock);
-        rwlock_acquire_write(testrwlock);
-    }
-
-    success(test_status, SECRET, "rwt3");
-
+    testrwlock = rwlock_create("testrwlock");
+    KASSERT(testrwlock != NULL);
+    rwlock_release_write(testrwlock);
+    
+    success(TEST161_FAIL, SECRET, "rwt3");
     rwlock_destroy(testrwlock);
     testrwlock = NULL;
 
     return 0;
 }
 
+// Tests reads that start before a write always complete before
+// write starts.
 int rwtest4(int nargs, char **args) {
-    (void)nargs;
-    (void)args;
-    int i =0;
+
+	(void)nargs;
+	(void)args;
+    int result;
+    const int READERS = 16;
 
     kprintf_n("Starting rwt4...\n");
 
+    // Shared memory.
+    shared_value = 0;
+
     test_status = TEST161_SUCCESS;
+	spinlock_init(&status_lock);  // supports failif().
+    start_sem = sem_create("start_sem", 0);
+    stop_sem = sem_create("stop_sem", 0);
+    KASSERT(start_sem != NULL);
+    KASSERT(stop_sem != NULL);
 
-    for (i=0; i<CREATELOOPS; i++) {
-        testrwlock = rwlock_create("testlock");
-        if (testrwlock == NULL) {
-            panic("rwt4: rwlock_create failed\n");
-        }
-        if (i != CREATELOOPS - 1) {
-            rwlock_destroy(testrwlock);
-        }
+    testrwlock = rwlock_create("testrwlock");
+    KASSERT(testrwlock != NULL);
+    for (int i = 0; i < READERS; i++) {
+        // Expected value to read.
+		result = thread_fork("reader", NULL, slow_reader, NULL, 0);
+		if (result) {   
+			panic("rwt4: thread_fork failed: %s\n", strerror(result));
+		}
     }
-
-    for (i=0; i<NTHREADS; i++) {
-        kprintf_t(".");
-        rwlock_release_read(testrwlock);
-        rwlock_release_write(testrwlock);
+    // Expected value to not read.
+    result = thread_fork("writer", NULL, fast_writer, NULL, 0xff);
+    if (result) {   
+       panic("rwt4: thread_fork failed: %s\n", strerror(result));
+	}
+    // Start readers, semi-concurrently after writers are created.
+    for (int i = 0; i < READERS; i++) {
+        V(start_sem);
     }
+    // Waits for writer to finish.
+    P(stop_sem);
+    failif(shared_value != 0xff);
 
+    // Threads can veto via test_status global.
     success(test_status, SECRET, "rwt4");
-
     rwlock_destroy(testrwlock);
     testrwlock = NULL;
-
+    sem_destroy(start_sem);
+    start_sem = NULL;
+    sem_destroy(stop_sem);
+    stop_sem = NULL;
     return 0;
 }
 
 int rwtest5(int nargs, char **args) {
     (void)nargs;
     (void)args;
-    int i =0;
+    return 0;
+}
 
-    kprintf_n("Starting rwt5...\n");
+int rwtest6(int nargs, char **args) {
+    (void)nargs;
+    (void)args;
+    return 0;
+}
+
+// TODO(aabo): write some tests to make sure locks
+// actually prevent contention to some shared resource
+// such as a buffer.
+
+// TODO(aabo): check for starvation of readers or writers.
+
+// Tests multiple readers can hold same lock.
+int rwtest7(int nargs, char **args) {
+    (void)nargs;
+    (void)args;
+
+    kprintf_n("Starting rwt7...\n");
 
     test_status = TEST161_SUCCESS;
 
-    for (i=0; i<CREATELOOPS; i++) {
-        testrwlock = rwlock_create("testlock");
-        if (testrwlock == NULL) {
-            panic("rwt5: rwlock_create failed\n");
-        }
-        if (i != CREATELOOPS - 1) {
-            rwlock_destroy(testrwlock);
-        }
+    testrwlock = rwlock_create("testrwlock");
+    KASSERT(testrwlock != NULL);
+
+    // TODO(aabo): Use multi-thread.
+    for (int i = 0; i < 10; i++) {
+        rwlock_acquire_read(testrwlock);
+    }
+    for (int i = 0; i < 10; i++) {
+        rwlock_release_read(testrwlock);
     }
 
-    for (i=0; i<NTHREADS; i++) {
-        kprintf_t(".");
-        rwlock_release_write(testrwlock);
-    }
-
-    success(test_status, SECRET, "rwt5");
+    success(test_status, SECRET, "rwt7");
 
     rwlock_destroy(testrwlock);
     testrwlock = NULL;
 
     return 0;
 }
+
+

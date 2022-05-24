@@ -306,33 +306,110 @@ cv_broadcast(struct cv *cv, struct lock *lock)
 	spinlock_release(&cv->cv_spinlock);	
 }
 
-struct rwlock * rwlock_create(const char *name)
+struct rwlock 
+*rwlock_create(const char *name)
 {
-	(void)name;
-	return NULL;
+	struct rwlock *rwlock;
+
+	rwlock = kmalloc(sizeof(*rwlock));
+	if (rwlock == NULL) {
+		return NULL;
+	}
+	rwlock->rwlock_name = kstrdup(name);
+	if (rwlock->rwlock_name == NULL) {
+		kfree(rwlock);
+		return NULL;
+	}
+	rwlock->state_lock = lock_create("state_lock");
+	if (rwlock->state_lock == NULL) {
+		kfree(rwlock->rwlock_name);
+		kfree(rwlock);
+		return NULL;
+	}
+	rwlock->read_entry_sem = sem_create("read_entry_sem", 1);
+	if (rwlock->read_entry_sem == NULL) {
+		lock_destroy(rwlock->state_lock);
+		kfree(rwlock->rwlock_name);
+		kfree(rwlock);
+		return NULL;
+	}
+	rwlock->write_sem = sem_create("write_sem", 1);
+	if (rwlock->write_sem == NULL) {
+		sem_destroy(rwlock->read_entry_sem);
+		lock_destroy(rwlock->state_lock);
+		kfree(rwlock->rwlock_name);
+		kfree(rwlock);
+		return NULL;
+	}
+	rwlock->readers = 0;
+	rwlock->writers = 0;
+	return rwlock;
 }
 
-void rwlock_destroy(struct rwlock *lock)
+void 
+rwlock_destroy(struct rwlock *rwlock)
 {
-	(void)lock;
+	KASSERT(rwlock != NULL);
+	sem_destroy(rwlock->write_sem);
+	sem_destroy(rwlock->read_entry_sem);
+	lock_destroy(rwlock->state_lock);
+	kfree(rwlock->rwlock_name);
+	kfree(rwlock);
 }
 
-void rwlock_acquire_read(struct rwlock *lock)
+void 
+rwlock_acquire_read(struct rwlock *rwlock)
 {
-	(void)lock;
+	KASSERT(rwlock != NULL);
+	P(rwlock->read_entry_sem);
+	lock_acquire(rwlock->state_lock);
+	rwlock->readers++;
+	if (rwlock->readers == 1) {
+		// First reader in blocks writers.
+		P(rwlock->write_sem);
+	}
+	lock_release(rwlock->state_lock);
+	V(rwlock->read_entry_sem);
 }
 
-void rwlock_release_read(struct rwlock *lock)
+void 
+rwlock_release_read(struct rwlock *rwlock)
 {
-	(void)lock;
+	KASSERT(rwlock != NULL);
+	lock_acquire(rwlock->state_lock);
+	KASSERT(rwlock->readers > 0);
+	rwlock->readers--;
+	if (rwlock->readers == 0) {
+		// Last reader out allows writers.
+		V(rwlock->write_sem);
+	}
+	lock_release(rwlock->state_lock);
 }
 
-void rwlock_acquire_write(struct rwlock *lock)
+void 
+rwlock_acquire_write(struct rwlock *rwlock)
 {
-	(void)lock;
+	KASSERT(rwlock != NULL);
+	// Writers block entry of new readers.
+	P(rwlock->read_entry_sem);
+	// Writers must wait for active readers or writers.
+	P(rwlock->write_sem);
+	lock_acquire(rwlock->state_lock);
+	KASSERT(rwlock->writers == 0);
+	rwlock->writers = 1;
+	lock_release(rwlock->state_lock);
+
 }
 
-void rwlock_release_write(struct rwlock *lock)
+void 
+rwlock_release_write(struct rwlock *rwlock)
 {
-	(void)lock;
+	KASSERT(rwlock != NULL);
+	lock_acquire(rwlock->state_lock);
+	KASSERT(rwlock->writers == 1);
+	rwlock->writers = 0;
+	// Allow entry of new readers before waking any waiting writers.
+	V(rwlock->read_entry_sem);
+	V(rwlock->write_sem);
+	lock_release(rwlock->state_lock);
 }
