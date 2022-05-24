@@ -113,11 +113,37 @@ reader2(void *unused, unsigned long thread_num)
 {
     (void)unused;
     rwlock_acquire_read(testrwlock);
+    random_yielder(4);
     // Counts times writer1 is successful.
     if (shared_value == 1) {
         ones++;
     }
     rwlock_release_read(testrwlock);
+    V(join_sem[thread_num]);
+}
+
+static
+void
+writer2(void *unused, unsigned long thread_num)
+{
+    (void)unused;
+    rwlock_acquire_write(testrwlock);
+    // Waits until reader2 and writer3 are pending.
+    P(start_sem);
+    shared_value = 0;
+    rwlock_release_write(testrwlock);
+    V(join_sem[thread_num]);
+}
+
+static
+void
+writer3(void *unused, unsigned long thread_num)
+{
+    (void)unused;
+    rwlock_acquire_write(testrwlock);
+    failif(shared_value != 0);
+    shared_value = 1;
+    rwlock_release_write(testrwlock);
     V(join_sem[thread_num]);
 }
 
@@ -288,7 +314,6 @@ int rwtest6(int nargs, char **args)
 
     kprintf_n("Starting rwt6...\n");
 
-
     test_status = TEST161_SUCCESS;
 	spinlock_init(&status_lock);  // supports failif().
     start_sem = sem_create("start_sem", 0);
@@ -347,30 +372,66 @@ int rwtest6(int nargs, char **args)
 
 // Tests writers do not starve readers.
 int rwtest7(int nargs, char **args) {
-    (void)nargs;
-    (void)args;
+	(void)nargs;
+	(void)args;
+    int result;
+    const int TRIES = 100;
+    int successes;
 
     kprintf_n("Starting rwt7...\n");
 
     test_status = TEST161_SUCCESS;
+	spinlock_init(&status_lock);  // supports failif().
+    start_sem = sem_create("start_sem", 0);
+    KASSERT(start_sem != NULL);
+    for (int i = 0; i < 3; i++) {
+        join_sem[i] = sem_create("join_sem", 0);
+        KASSERT(join_sem[i] != NULL);
+    }
 
     testrwlock = rwlock_create("testrwlock");
     KASSERT(testrwlock != NULL);
-
-    // TODO(aabo): Use multi-thread.
-    for (int i = 0; i < 10; i++) {
-        rwlock_acquire_read(testrwlock);
+    ones = 0;
+    for (int i = 0; i < TRIES; i++) {
+        result = thread_fork("writer2", NULL, writer2, NULL, 0);
+        if (result) {   
+            panic("rwt7: thread_fork failed: %s\n", strerror(result));
+	    }
+	    result = thread_fork("reader2", NULL, reader2, NULL, 1);
+	    if (result) {   
+		    panic("rwt7: thread_fork failed: %s\n", strerror(result));
+	    }
+        // Attempts to starve out reader2.
+        result = thread_fork("writer3", NULL, writer3, NULL, 2);
+        if (result) {   
+            panic("rwt7: thread_fork failed: %s\n", strerror(result));
+	    }
+        // Starts writer2.
+        V(start_sem);
+        // Waits for all threads to finish.
+        for (int j = 0; j < 3; j++) {
+            P(join_sem[j]);
+        }
     }
-    for (int i = 0; i < 10; i++) {
-        rwlock_release_read(testrwlock);
+    // Declare failure if reader2 starves more than this fraction.
+    successes = TRIES - ones;
+    kprintf_n("Reader succeeded %d/%d\n", successes, TRIES);
+    if (successes < TRIES / 3) {
+        test_status = TEST161_FAIL;
     }
 
+    // Threads can veto via test_status global.
     success(test_status, SECRET, "rwt7");
-
     rwlock_destroy(testrwlock);
     testrwlock = NULL;
-
+    sem_destroy(start_sem);
+    start_sem = NULL;
+    for (int i = 0; i < 3; i++) {
+        sem_destroy(join_sem[i]);
+        join_sem[i] = NULL;
+    }
     return 0;
+
 }
 
 
