@@ -341,16 +341,19 @@ whalemating(int nargs, char **args) {
 	 * matches to finish.
 	 */
 	int pivot = (random() % (NMATING - 2)) + 1;
+	kprintf_n("\nReleasing %d matchmakers.\n\n", pivot);
 	for (i = 0; i < pivot; i++) {
 		kprintf_t(".");
 		V(matcher_sem);
 	}
+	kprintf_n("Waiting for males, females, matchers to end...\n");
 	for (i = 0; i < 3 * pivot; i++) {
 		kprintf_t(".");
 		P(endsem);
 		total_count--;
 	}
 
+	kprintf_n("Checking for uncoordinating mating...\n");
 	/* Make sure nothing else is happening... */
 	loop_status = TEST161_SUCCESS;
 	for (i = 0; i < CHECK_TIMES && loop_status == TEST161_SUCCESS; i++) {
@@ -372,10 +375,12 @@ whalemating(int nargs, char **args) {
 	 * Release the rest of the matchmakers and wait for everyone to finish.
 	 */
 
+	kprintf_n("Releasing %d matchers.\n", NMATING - pivot);
 	for (i = pivot; i < NMATING; i++) {
 		kprintf_t(".");
 		V(matcher_sem);
 	}
+	kprintf_n("Waiting for males, females, matchers to end...\n");
 	for (i = 0; i < 3; i++) {
 		for (j = pivot; j < NMATING; j++) {
 			kprintf_t(".");
@@ -383,12 +388,13 @@ whalemating(int nargs, char **args) {
 			total_count--;
 		}
 	}
-
+	kprintf_n("ok\n");
 	failif((max_concurrent_matchmakers == 1), "failed: no matchmaker concurrency");
 
 	whalemating_cleanup();
 
 done:
+	kprintf_n("Waiting for %d endsem...\n", total_count);
 	for (i = 0; i < total_count; i++) {
 		P(endsem);
 	}
