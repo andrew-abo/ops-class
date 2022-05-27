@@ -142,11 +142,11 @@ static
 void
 _enter(int direction, uint32_t index) 
 {
-	lock_acquire(quadrant_lock[to]);
+	lock_acquire(quadrant_lock[direction]);
 	lock_acquire(occupancy_lock);
 	occupancy++;
 	lock_release(occupancy_lock);
-	inQuadrant(to, index);
+	inQuadrant(direction, index);
 }
 
 // Thread index leaves intersection from quandrant.
@@ -189,6 +189,7 @@ turnright(uint32_t direction, uint32_t index)
 		cv_wait(flow_cv, flow_lock);
 	}
 	if (flow == IDLE) {
+        kprintf_n("thread %u setting flow %d -> %d\n", index, flow, my_flow);
 		flow = my_flow;
 	}
 	cv_broadcast(flow_cv, flow_lock);
@@ -250,6 +251,7 @@ turnleft(uint32_t direction, uint32_t index)
 		cv_wait(flow_cv, flow_lock);
 	}
 	flow = LEFT_TURN;
+	kprintf_n("thread %u setting flow %d -> %d\n", index, IDLE, flow);
 	// Waking other threads is useless unless we define all
 	// 4 left turns in the future.
 	cv_broadcast(flow_cv, flow_lock);
