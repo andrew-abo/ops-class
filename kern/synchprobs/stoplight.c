@@ -130,8 +130,52 @@ void stoplight_cleanup() {
 void
 turnright(uint32_t direction, uint32_t index)
 {
-	inQuadrant(direction, index);
+	flow_t my_flow;
+	int prev_quadrant, next_quadrant;
+	
+	switch (direction) {
+		case 0:
+		case 2:
+		  my_flow = NORTH_SOUTH;
+		  break;
+		case 1:
+		case 3:
+		  my_flow = EAST_WEST;
+		  break;
+		default:
+		  panic("gostraight(%d, %d): Unknown direction.", direction, index);
+	}
+	lock_acquire(flow_lock);
+	while ((flow != IDLE) && (flow != my_flow)) {
+		cv_wait(flow_cv, flow_lock);
+	}
+	if (flow == IDLE) {
+		flow = my_flow;
+	}
+	cv_broadcast(flow_cv, flow_lock);
+	lock_release(flow_lock);
+
+	// Forward 1.
+	next_quadrant = direction;
+	lock_acquire(quadrant_lock[next_quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy++;
+	lock_release(occupancy_lock);
+	inQuadrant(next_quadrant, index);
+
+	// Exit.
 	leaveIntersection(index);
+	prev_quadrant = next_quadrant;
+	lock_release(quadrant_lock[prev_quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy--;
+	if (occupancy == 0) {
+		lock_acquire(flow_lock);
+		flow = IDLE;
+		cv_broadcast(flow_cv, flow_lock);
+		lock_release(flow_lock);
+	}
+	lock_release(occupancy_lock);
 }
 
 void

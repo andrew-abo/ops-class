@@ -645,7 +645,7 @@ int stoplight(int nargs, char **args) {
 		direction = random() % 4;
 		//DEBUG
 		//turn = random() % 3;
-		turn = GO_STRAIGHT;
+		turn =(random() % 2) * 2;
 
 		snprintf(name, sizeof(name), "Car Thread %d", i);
 
