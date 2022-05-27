@@ -73,13 +73,45 @@
  * Called by the driver during initialization.
  */
 
-struct lock *intersection_lock;
+// Mutex to occupy quadrant [i].
+static struct lock *quadrant_lock[4];
+
+// Must acquire flow_sem to access flow_state.
+static struct cv *flow_cv;
+
+typedef enum { 
+	NORTH_SOUTH,  // north-south and right turn concurrency allowed.
+	EAST_WEST,    // east-west and right turn concurrency allowed.
+	LEFT_TURN,    // No concurrency.
+	IDLE          // No cars in intersection.
+} flow_t;
+static volatile flow_t flow;
+static struct lock *flow_lock;
+
+// Number of cars in the intersection.
+static volatile int occupancy;
+static struct lock *occupancy_lock;
+
+
 
 void
 stoplight_init() {
-	if ((intersection_lock = lock_create("intersection")) == NULL) {
-		panic("Cannot create intersection_lock.");
+	for (int i = 0; i < 4; i++) {
+        if ((quadrant_lock[i] = lock_create("quadrant")) == NULL) {
+            panic("Cannot create quadrant_lock[%d].", i);
+        }
 	}
+	if ((flow_cv = cv_create("flow")) == NULL) {
+		panic("Cannot create flow_cv.");
+	}
+	if ((flow_lock = lock_create("flow")) == NULL) {
+		panic("Cannot create flow_lock.");
+	}
+	if ((occupancy_lock = lock_create("occupancy")) == NULL) {
+		panic("Cannot create occupancy_lock.");
+	}
+	flow = IDLE;
+	occupancy = 0;
 }
 
 /*
@@ -87,34 +119,84 @@ stoplight_init() {
  */
 
 void stoplight_cleanup() {
-	lock_destroy(intersection_lock);
+	for (int i = 0; i < 4; i++) {
+		lock_destroy(quadrant_lock[i]);
+	}
+	cv_destroy(flow_cv);	
+	lock_destroy(flow_lock);
+	lock_destroy(occupancy_lock);
 }
 
 void
 turnright(uint32_t direction, uint32_t index)
 {
-	lock_acquire(intersection_lock);
 	inQuadrant(direction, index);
 	leaveIntersection(index);
-	lock_release(intersection_lock);
 }
 
 void
 gostraight(uint32_t direction, uint32_t index)
 {
-	lock_acquire(intersection_lock);
-	inQuadrant(direction, index);
+	flow_t my_flow;
+	int prev_quadrant, next_quadrant;
+
+	switch (direction) {
+		case 0:
+		case 2:
+		  my_flow = NORTH_SOUTH;
+		  break;
+		case 1:
+		case 3:
+		  my_flow = EAST_WEST;
+		  break;
+		default:
+		  panic("gostraight(%d, %d): Unknown direction.", direction, index);
+	}
+	lock_acquire(flow_lock);
+	while ((flow != IDLE) && (flow != my_flow)) {
+		cv_wait(flow_cv, flow_lock);
+	}
+	if (flow == IDLE) {
+		flow = my_flow;
+	}
+	cv_broadcast(flow_cv, flow_lock);
+	lock_release(flow_lock);
+
+	// Forward 1.
+	next_quadrant = direction;
+	lock_acquire(quadrant_lock[next_quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy++;
+	lock_release(occupancy_lock);
+	inQuadrant(next_quadrant, index);
+
+	// Forward 1.
+	prev_quadrant = next_quadrant;
+	next_quadrant = (next_quadrant + 3) % 4;
+	lock_acquire(quadrant_lock[next_quadrant]);
 	inQuadrant((direction + 3) % 4, index);
+	lock_release(quadrant_lock[prev_quadrant]);
+
+	// Exit.
 	leaveIntersection(index);
-	lock_release(intersection_lock);
+	prev_quadrant = next_quadrant;
+	lock_release(quadrant_lock[prev_quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy--;
+	if (occupancy == 0) {
+		lock_acquire(flow_lock);
+		flow = IDLE;
+		cv_broadcast(flow_cv, flow_lock);
+		lock_release(flow_lock);
+	}
+	lock_release(occupancy_lock);
 }
+
 void
 turnleft(uint32_t direction, uint32_t index)
 {
-	lock_acquire(intersection_lock);
 	inQuadrant(direction, index);
 	inQuadrant((direction + 3) % 4, index);
 	inQuadrant((direction + 2) % 4, index);
 	leaveIntersection(index);
-	lock_release(intersection_lock);
 }
