@@ -143,7 +143,7 @@ turnright(uint32_t direction, uint32_t index)
 		  my_flow = EAST_WEST;
 		  break;
 		default:
-		  panic("gostraight(%d, %d): Unknown direction.", direction, index);
+		  panic("goright(%d, %d): Unknown direction.", direction, index);
 	}
 	lock_acquire(flow_lock);
 	while ((flow != IDLE) && (flow != my_flow)) {
@@ -218,7 +218,7 @@ gostraight(uint32_t direction, uint32_t index)
 	prev_quadrant = next_quadrant;
 	next_quadrant = (next_quadrant + 3) % 4;
 	lock_acquire(quadrant_lock[next_quadrant]);
-	inQuadrant((direction + 3) % 4, index);
+	inQuadrant(next_quadrant, index);
 	lock_release(quadrant_lock[prev_quadrant]);
 
 	// Exit.
@@ -239,8 +239,54 @@ gostraight(uint32_t direction, uint32_t index)
 void
 turnleft(uint32_t direction, uint32_t index)
 {
-	inQuadrant(direction, index);
-	inQuadrant((direction + 3) % 4, index);
-	inQuadrant((direction + 2) % 4, index);
+	int prev_quadrant, next_quadrant;
+
+	// Only allow one car in the intersection during a left turn.
+	// We could be a little more efficient and have 4 kinds
+	// of left turns, 1 for each direction.
+	lock_acquire(flow_lock);
+	while (flow != IDLE) {
+		cv_wait(flow_cv, flow_lock);
+	}
+	flow = LEFT_TURN;
+	// Waking other threads is useless unless we define all
+	// 4 left turns in the future.
+	cv_broadcast(flow_cv, flow_lock);
+	lock_release(flow_lock);
+
+	// Forward 1.
+	next_quadrant = direction;
+	lock_acquire(quadrant_lock[next_quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy++;
+	lock_release(occupancy_lock);
+	inQuadrant(next_quadrant, index);
+
+	// Forward 1.
+	prev_quadrant = next_quadrant;
+	next_quadrant = (next_quadrant + 3) % 4;
+	lock_acquire(quadrant_lock[next_quadrant]);
+	inQuadrant(next_quadrant, index);
+	lock_release(quadrant_lock[prev_quadrant]);
+
+	// Left 1.
+	prev_quadrant = next_quadrant;
+	next_quadrant = (next_quadrant + 3) % 4;
+	lock_acquire(quadrant_lock[next_quadrant]);
+	inQuadrant(next_quadrant, index);
+	lock_release(quadrant_lock[prev_quadrant]);
+
+	// Exit.
 	leaveIntersection(index);
+	prev_quadrant = next_quadrant;
+	lock_release(quadrant_lock[prev_quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy--;
+	if (occupancy == 0) {
+		lock_acquire(flow_lock);
+		flow = IDLE;
+		cv_broadcast(flow_cv, flow_lock);
+		lock_release(flow_lock);
+	}
+	lock_release(occupancy_lock);
 }
