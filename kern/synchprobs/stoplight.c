@@ -93,13 +93,12 @@ void stoplight_cleanup() {
 void
 turnright(uint32_t direction, uint32_t index)
 {
-	(void)direction;
-	(void)index;
-	/*
-	 * Implement this function.
-	 */
-	return;
+	lock_acquire(intersection_lock);
+	inQuadrant(direction, index);
+	leaveIntersection(index);
+	lock_release(intersection_lock);
 }
+
 void
 gostraight(uint32_t direction, uint32_t index)
 {
@@ -112,10 +111,10 @@ gostraight(uint32_t direction, uint32_t index)
 void
 turnleft(uint32_t direction, uint32_t index)
 {
-	(void)direction;
-	(void)index;
-	/*
-	 * Implement this function.
-	 */
-	return;
+	lock_acquire(intersection_lock);
+	inQuadrant(direction, index);
+	inQuadrant((direction + 3) % 4, index);
+	inQuadrant((direction + 2) % 4, index);
+	leaveIntersection(index);
+	lock_release(intersection_lock);
 }
