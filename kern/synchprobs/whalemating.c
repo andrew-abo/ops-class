@@ -40,12 +40,35 @@
 #include <test.h>
 #include <synch.h>
 
+// Number males available.
+static struct semaphore *males_avail_sem;
+
+// Number of males allowed to mate now.
+static struct semaphore *males_can_mate_sem;
+
+// Number of females available.
+static struct semaphore *females_avail_sem;
+
+// Number of females allowed to mate now.
+static struct semaphore *females_can_mate_sem;
+
 /*
  * Called by the driver during initialization.
  */
 
 void whalemating_init() {
-	return;
+	if ((males_avail_sem = sem_create("males_avail", 0)) == NULL) {
+		panic("Cannot create males_avail_sem.");
+	}
+	if ((males_can_mate_sem = sem_create("males_can_mate", 0)) == NULL) {
+		panic("Canot create males_can_mate_sem.");
+	}
+	if ((females_avail_sem = sem_create("females_avail", 0)) == NULL) {
+		panic("Cannot create females_avail_sem");
+	}
+	if ((females_can_mate_sem = sem_create("females_can_mate", 0)) == NULL) {
+		panic("Cannot create females_can_mate_sem");
+	}
 }
 
 /*
@@ -54,38 +77,37 @@ void whalemating_init() {
 
 void
 whalemating_cleanup() {
-	return;
+	sem_destroy(males_avail_sem);
+	sem_destroy(males_can_mate_sem);
+	sem_destroy(females_avail_sem);
+	sem_destroy(females_can_mate_sem);
 }
 
 void
 male(uint32_t index)
 {
-	(void)index;
-	/*
-	 * Implement this function by calling male_start and male_end when
-	 * appropriate.
-	 */
-	return;
+	male_start(index);
+	V(males_avail_sem);
+	P(males_can_mate_sem);
+	male_end(index);
 }
 
 void
 female(uint32_t index)
 {
-	(void)index;
-	/*
-	 * Implement this function by calling female_start and female_end when
-	 * appropriate.
-	 */
-	return;
+	female_start(index);
+	V(females_avail_sem);
+	P(females_can_mate_sem);
+	female_end(index);
 }
 
 void
 matchmaker(uint32_t index)
 {
-	(void)index;
-	/*
-	 * Implement this function by calling matchmaker_start and matchmaker_end
-	 * when appropriate.
-	 */
-	return;
+	matchmaker_start(index);
+	P(males_avail_sem);
+	P(females_avail_sem);
+	V(males_can_mate_sem);
+	V(females_can_mate_sem);
+	matchmaker_end(index);
 }
