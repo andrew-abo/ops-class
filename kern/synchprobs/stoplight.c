@@ -145,8 +145,8 @@ _enter(int direction, uint32_t index)
 	lock_acquire(quadrant_lock[to]);
 	lock_acquire(occupancy_lock);
 	occupancy++;
-	inQuadrant(to, index);
 	lock_release(occupancy_lock);
+	inQuadrant(to, index);
 }
 
 // Thread index leaves intersection from quandrant.
