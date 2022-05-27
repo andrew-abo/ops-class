@@ -127,11 +127,51 @@ void stoplight_cleanup() {
 	lock_destroy(occupancy_lock);
 }
 
+// Moves car index between quadrants.
+// from < 0 does not release quadrant_lock.
+static
+void
+_move(int from, int to, uint32_t index) 
+{
+	lock_acquire(quadrant_lock[to]);
+	inQuadrant(to, index);
+	if (from >= 0) {
+        lock_release(quadrant_lock[from]);
+	}
+}
+
+static
+void
+_enter(int direction, uint32_t index) 
+{
+	_move(-1, direction, index);
+	lock_acquire(occupancy_lock);
+	occupancy++;
+	lock_release(occupancy_lock);
+}
+
+// Thread index leaves intersection from quandrant.
+static 
+void
+_leave(int quadrant, uint32_t index)
+{
+	leaveIntersection(index);
+	lock_release(quadrant_lock[quadrant]);
+	lock_acquire(occupancy_lock);
+	occupancy--;
+	if (occupancy == 0) {
+		lock_acquire(flow_lock);
+		flow = IDLE;
+		cv_broadcast(flow_cv, flow_lock);
+		lock_release(flow_lock);
+	}
+	lock_release(occupancy_lock);
+}
+
 void
 turnright(uint32_t direction, uint32_t index)
 {
 	flow_t my_flow;
-	int prev_quadrant, next_quadrant;
 	
 	switch (direction) {
 		case 0:
@@ -155,27 +195,8 @@ turnright(uint32_t direction, uint32_t index)
 	cv_broadcast(flow_cv, flow_lock);
 	lock_release(flow_lock);
 
-	// Forward 1.
-	next_quadrant = direction;
-	lock_acquire(quadrant_lock[next_quadrant]);
-	lock_acquire(occupancy_lock);
-	occupancy++;
-	lock_release(occupancy_lock);
-	inQuadrant(next_quadrant, index);
-
-	// Exit.
-	leaveIntersection(index);
-	prev_quadrant = next_quadrant;
-	lock_release(quadrant_lock[prev_quadrant]);
-	lock_acquire(occupancy_lock);
-	occupancy--;
-	if (occupancy == 0) {
-		lock_acquire(flow_lock);
-		flow = IDLE;
-		cv_broadcast(flow_cv, flow_lock);
-		lock_release(flow_lock);
-	}
-	lock_release(occupancy_lock);
+	_enter(direction, index);
+	_leave(direction, index);
 }
 
 void
@@ -206,34 +227,14 @@ gostraight(uint32_t direction, uint32_t index)
 	cv_broadcast(flow_cv, flow_lock);
 	lock_release(flow_lock);
 
-	// Forward 1.
-	next_quadrant = direction;
-	lock_acquire(quadrant_lock[next_quadrant]);
-	lock_acquire(occupancy_lock);
-	occupancy++;
-	lock_release(occupancy_lock);
-	inQuadrant(next_quadrant, index);
+	_enter(direction, index);
 
 	// Forward 1.
-	prev_quadrant = next_quadrant;
-	next_quadrant = (next_quadrant + 3) % 4;
-	lock_acquire(quadrant_lock[next_quadrant]);
-	inQuadrant(next_quadrant, index);
-	lock_release(quadrant_lock[prev_quadrant]);
+	prev_quadrant = direction;
+	next_quadrant = (prev_quadrant + 3) % 4;
+	_move(prev_quadrant, next_quadrant, index);
 
-	// Exit.
-	leaveIntersection(index);
-	prev_quadrant = next_quadrant;
-	lock_release(quadrant_lock[prev_quadrant]);
-	lock_acquire(occupancy_lock);
-	occupancy--;
-	if (occupancy == 0) {
-		lock_acquire(flow_lock);
-		flow = IDLE;
-		cv_broadcast(flow_cv, flow_lock);
-		lock_release(flow_lock);
-	}
-	lock_release(occupancy_lock);
+	_leave(next_quadrant, index);
 }
 
 void
@@ -254,39 +255,17 @@ turnleft(uint32_t direction, uint32_t index)
 	cv_broadcast(flow_cv, flow_lock);
 	lock_release(flow_lock);
 
-	// Forward 1.
-	next_quadrant = direction;
-	lock_acquire(quadrant_lock[next_quadrant]);
-	lock_acquire(occupancy_lock);
-	occupancy++;
-	lock_release(occupancy_lock);
-	inQuadrant(next_quadrant, index);
+	_enter(direction, index);
 
 	// Forward 1.
-	prev_quadrant = next_quadrant;
-	next_quadrant = (next_quadrant + 3) % 4;
-	lock_acquire(quadrant_lock[next_quadrant]);
-	inQuadrant(next_quadrant, index);
-	lock_release(quadrant_lock[prev_quadrant]);
+	prev_quadrant = direction;
+	next_quadrant = (prev_quadrant + 3) % 4;
+	_move(prev_quadrant, next_quadrant, index);
 
 	// Left 1.
 	prev_quadrant = next_quadrant;
-	next_quadrant = (next_quadrant + 3) % 4;
-	lock_acquire(quadrant_lock[next_quadrant]);
-	inQuadrant(next_quadrant, index);
-	lock_release(quadrant_lock[prev_quadrant]);
+	next_quadrant = (prev_quadrant + 3) % 4;
+	_move(prev_quadrant, next_quadrant, index);
 
-	// Exit.
-	leaveIntersection(index);
-	prev_quadrant = next_quadrant;
-	lock_release(quadrant_lock[prev_quadrant]);
-	lock_acquire(occupancy_lock);
-	occupancy--;
-	if (occupancy == 0) {
-		lock_acquire(flow_lock);
-		flow = IDLE;
-		cv_broadcast(flow_cv, flow_lock);
-		lock_release(flow_lock);
-	}
-	lock_release(occupancy_lock);
+	_leave(next_quadrant, index);
 }
