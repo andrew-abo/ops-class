@@ -73,9 +73,13 @@
  * Called by the driver during initialization.
  */
 
+struct lock *intersection_lock;
+
 void
 stoplight_init() {
-	return;
+	if ((intersection_lock = lock_create("intersection")) == NULL) {
+		panic("Cannot create intersection_lock.");
+	}
 }
 
 /*
@@ -83,7 +87,7 @@ stoplight_init() {
  */
 
 void stoplight_cleanup() {
-	return;
+	lock_destroy(intersection_lock);
 }
 
 void
@@ -99,12 +103,11 @@ turnright(uint32_t direction, uint32_t index)
 void
 gostraight(uint32_t direction, uint32_t index)
 {
-	(void)direction;
-	(void)index;
-	/*
-	 * Implement this function.
-	 */
-	return;
+	lock_acquire(intersection_lock);
+	inQuadrant(direction, index);
+	inQuadrant((direction + 3) % 4, index);
+	leaveIntersection(index);
+	lock_release(intersection_lock);
 }
 void
 turnleft(uint32_t direction, uint32_t index)
