@@ -135,18 +135,17 @@ _move(int from, int to, uint32_t index)
 {
 	lock_acquire(quadrant_lock[to]);
 	inQuadrant(to, index);
-	if (from >= 0) {
-        lock_release(quadrant_lock[from]);
-	}
+	lock_release(quadrant_lock[from]);
 }
 
 static
 void
 _enter(int direction, uint32_t index) 
 {
-	_move(-1, direction, index);
+	lock_acquire(quadrant_lock[to]);
 	lock_acquire(occupancy_lock);
 	occupancy++;
+	inQuadrant(to, index);
 	lock_release(occupancy_lock);
 }
 
@@ -183,7 +182,7 @@ turnright(uint32_t direction, uint32_t index)
 		  my_flow = EAST_WEST;
 		  break;
 		default:
-		  panic("goright(%d, %d): Unknown direction.", direction, index);
+		  panic("turnright(%d, %d): Unknown direction.", direction, index);
 	}
 	lock_acquire(flow_lock);
 	while ((flow != IDLE) && (flow != my_flow)) {
@@ -222,6 +221,7 @@ gostraight(uint32_t direction, uint32_t index)
 		cv_wait(flow_cv, flow_lock);
 	}
 	if (flow == IDLE) {
+		kprintf_n("thread %u setting flow %d -> %d\n", index, flow, my_flow);
 		flow = my_flow;
 	}
 	cv_broadcast(flow_cv, flow_lock);
