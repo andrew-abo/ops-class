@@ -1,7 +1,7 @@
 ---
 name: "RW Lock Test 5"
 description:
-  Tests reader-writer lock error handling. Panics on success.
+  Tests write collisions do not occurr.
 tags: [synch, rwlocks]
 depends: [boot]
 sys161:

@@ -1,12 +1,11 @@
 ---
 name: "RW Lock Test 1"
 description:
-  Tests core reader-writer lock functionality by reading and writing shared
-  state.
+  Tests create/destory reader-writer locksssss.
 tags: [synch, rwlocks, kleaks]
 depends: [boot, semaphores]
 sys161:
-  cpus: 32
+  cpus: 1
 ---
 khu
 rwt1
