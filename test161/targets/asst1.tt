@@ -25,7 +25,7 @@ tests:
   - id: synch/cvt5.t
     points: 1
   - id: synch/rwt1.t
-    points: 5
+    points: 3
   - id: synch/rwt2.t
     points: 2
   - id: synch/rwt3.t
@@ -33,6 +33,10 @@ tests:
   - id: synch/rwt4.t
     points: 1
   - id: synch/rwt5.t
+    points: 1
+  - id: synch/rwt6.t
+    points: 1
+  - id: synch/rwt7.t
     points: 1
   - id: synchprobs/sp1.t
     points: 10
