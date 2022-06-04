@@ -188,6 +188,7 @@ lock_acquire(struct lock *lock)
 
 	/* Call this (atomically) before waiting for a lock */
 	HANGMAN_WAIT(&curthread->t_hangman, &lock->lk_hangman);
+	KASSERT(lock_do_i_hold(lock) == false);
 
 	while (lock->locked) {
 		wchan_sleep(lock->lk_wchan, &lock->lk_spinlock);
