@@ -53,6 +53,8 @@
  * intending to use byte counts should update uio_offset to the
  * desired value explicitly after calling uiomove, as uiomove always
  * increments uio_offset by the number of bytes transferred.
+ * 
+ * See The Design and Implementation of the 4.3BSD UNIX Operating System, p. 184
  */
 
 #include <kern/iovec.h>

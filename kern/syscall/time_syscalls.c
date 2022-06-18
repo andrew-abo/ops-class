@@ -32,6 +32,11 @@
 #include <copyinout.h>
 #include <syscall.h>
 
+// Kernel-facing system calls.
+// User calls libc system calls which get dispatched
+// by the kernel.
+
+
 /*
  * Example system call: get the time of day.
  */

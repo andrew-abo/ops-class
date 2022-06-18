@@ -144,7 +144,7 @@
 #
 #       are called from autoconf.c to create instances as requested.
 #       These calls are made from the function pseudoconfig(), which
-#       should be called from dev/init.c after hardware device
+#       should be called from dev/ after hardware device
 #       initialization completes. The pseudoattach functions should
 #       perform all setup and initialization necessary. (No
 #       config_devname function will be called.)
@@ -384,6 +384,7 @@ file      vfs/devnull.c
 # calls assignment.)
 #
 
+file      syscall/file_handle.c
 file      syscall/loadelf.c
 file      syscall/runprogram.c
 file      syscall/time_syscalls.c
@@ -441,6 +442,7 @@ defoption netfs
 
 file		test/arraytest.c
 file		test/bitmaptest.c
+file        test/fhtest.c
 file		test/threadlisttest.c
 file		test/threadtest.c
 file		test/tt3.c

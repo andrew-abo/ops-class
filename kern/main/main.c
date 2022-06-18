@@ -33,6 +33,7 @@
 
 #include <types.h>
 #include <kern/errno.h>
+#include <kern/fcntl.h>
 #include <kern/reboot.h>
 #include <kern/unistd.h>
 #include <lib.h>
@@ -46,12 +47,14 @@
 #include <mainbus.h>
 #include <vfs.h>
 #include <device.h>
+#include <file_handle.h>
 #include <syscall.h>
 #include <test.h>
 #include <kern/test161.h>
 #include <version.h>
 #include "autoconf.h"  // for pseudoconfig
 
+#define CONSOLE "con:"  // Path to console device.
 
 /*
  * These two pieces of data are maintained by the makefiles and build system.
@@ -72,6 +75,57 @@ static const char harvard_copyright[] =
     "Copyright (c) 2000, 2001-2005, 2008-2011, 2013, 2014\n"
     "   President and Fellows of Harvard College.  All rights reserved.\n";
 
+static struct file_handle *console_in = NULL;
+static struct file_handle *console_out = NULL;
+
+/*
+ * Initialize console file handles.
+ */
+static void
+init_console()
+{
+	struct vnode *vconsole_in, *vconsole_out;
+	int result;
+	char console_path[16];
+
+	KASSERT(console_in == NULL);
+	KASSERT(console_out == NULL);
+
+	console_in = create_file_handle("console_in");
+	if (console_in == NULL) {
+		panic("Cannot create console_in.");
+	}
+	console_out = create_file_handle("console_out");
+	if (console_out == NULL) {
+		panic("Cannot create console_out.");
+	}
+	// vfs_open destructively uses filepath, so pass in a copy.
+	strcpy(console_path, CONSOLE);
+	result = vfs_open(console_path, O_RDONLY, 0x444, &vconsole_in);
+	if (result) {
+        panic("Cannot open  for read.");
+	}
+	// vfs_open destructively uses filepath, so pass in a copy.
+	strcpy(console_path, CONSOLE);	
+	result = vfs_open(console_path, O_WRONLY, 0x222, &vconsole_out);
+	if (result) {
+		panic("Cannot open CONSOLE for write.");
+	}
+	console_in->vn = vconsole_in;
+	console_out->vn = vconsole_out;
+}
+
+static void
+tear_down_console()
+{
+	KASSERT(console_in != NULL);
+	KASSERT(console_out != NULL);
+
+	vfs_close(console_in->vn);
+	vfs_close(console_out->vn);
+	destroy_file_handle(console_in);
+	destroy_file_handle(console_out);
+}
 
 /*
  * Initial boot sequence.
@@ -141,6 +195,11 @@ boot(void)
 	 */
 	COMPILE_ASSERT(sizeof(userptr_t) == sizeof(char *));
 	COMPILE_ASSERT(sizeof(*(userptr_t)0) == sizeof(char));
+	
+	init_console();
+	kproc->files[STDIN_FILENO] = console_in;
+	kproc->files[STDOUT_FILENO] = console_out;
+	kproc->files[STDERR_FILENO] = console_out;
 }
 
 /*
@@ -158,6 +217,7 @@ shutdown(void)
 	vfs_unmountall();
 
 	thread_shutdown();
+	tear_down_console();
 
 	splhigh();
 }

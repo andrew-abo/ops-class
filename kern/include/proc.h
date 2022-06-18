@@ -36,6 +36,8 @@
  * Note: curproc is defined by <current.h>.
  */
 
+#include <file_handle.h>
+#include <limits.h>
 #include <spinlock.h>
 
 struct addrspace;
@@ -70,7 +72,8 @@ struct proc {
 	/* VFS */
 	struct vnode *p_cwd;		/* current working directory */
 
-	/* add more material here as needed */
+	// File descriptor table
+	struct file_handle *files[FILES_PER_PROCESS_MAX];
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

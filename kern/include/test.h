@@ -77,6 +77,9 @@ int rwtest5(int, char **);
 int rwtest6(int, char **);
 int rwtest7(int, char **);
 
+/* file handle tests */
+int fhtest1(int, char **);
+
 /* semaphore unit tests */
 int semu1(int, char **);
 int semu2(int, char **);
