@@ -57,6 +57,7 @@ destroy_file_handle(struct file_handle *fh)
     struct lock *file_lock;
  
     KASSERT(fh != NULL);
+    KASSERT(lock_do_i_hold(fh->file_lock) == false);
 
     lock_acquire(fh->file_lock);
     KASSERT(fh->ref_count == 0);

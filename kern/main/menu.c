@@ -609,6 +609,7 @@ static const char *testmenu[] = {
 	"[rwt6] RW lock test 6        (1?)   ",
 	"[rwt7] RW lock test 7        (1?)   ",
 	"[fh1] file_handle test 1            ",
+	"[fh2] file_handle test 2     (*)    ",
 #if OPT_SYNCHPROBS
 	"[sp1] Whalemating test       (1)    ",
 	"[sp2] Stoplight test         (1)    ",
@@ -765,6 +766,7 @@ static struct {
 	{ "rwt6",	rwtest6 },
 	{ "rwt7",	rwtest7 },
 	{ "fh1",    fhtest1 },
+	{ "fh2",    fhtest2 },
 #if OPT_SYNCHPROBS
 	{ "sp1",	whalemating },
 	{ "sp2",	stoplight },

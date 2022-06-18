@@ -144,7 +144,7 @@
 #
 #       are called from autoconf.c to create instances as requested.
 #       These calls are made from the function pseudoconfig(), which
-#       should be called from dev/ after hardware device
+#       should be called from dev/init.c after hardware device
 #       initialization completes. The pseudoattach functions should
 #       perform all setup and initialization necessary. (No
 #       config_devname function will be called.)
