@@ -84,35 +84,23 @@ static struct file_handle *console_out = NULL;
 static void
 init_console()
 {
-	struct vnode *vconsole_in, *vconsole_out;
-	int result;
-	char console_path[16];
-
 	KASSERT(console_in == NULL);
 	KASSERT(console_out == NULL);
 
-	console_in = create_file_handle("console_in");
+	console_in = open_file_handle(CONSOLE, O_RDONLY);
 	if (console_in == NULL) {
 		panic("Cannot create console_in.");
 	}
-	console_out = create_file_handle("console_out");
+	console_out = open_file_handle(CONSOLE, O_WRONLY);
 	if (console_out == NULL) {
 		panic("Cannot create console_out.");
 	}
-	// vfs_open destructively uses filepath, so pass in a copy.
-	strcpy(console_path, CONSOLE);
-	result = vfs_open(console_path, O_RDONLY, 0x444, &vconsole_in);
-	if (result) {
-        panic("Cannot open  for read.");
-	}
-	// vfs_open destructively uses filepath, so pass in a copy.
-	strcpy(console_path, CONSOLE);	
-	result = vfs_open(console_path, O_WRONLY, 0x222, &vconsole_out);
-	if (result) {
-		panic("Cannot open CONSOLE for write.");
-	}
-	console_in->vn = vconsole_in;
-	console_out->vn = vconsole_out;
+	curproc->files[STDIN_FILENO] = console_in;
+	console_in->ref_count++;
+	curproc->files[STDOUT_FILENO] = console_out;
+	console_out->ref_count++;
+	curproc->files[STDERR_FILENO] = console_out;
+	console_out->ref_count++;
 }
 
 static void
@@ -121,10 +109,10 @@ tear_down_console()
 	KASSERT(console_in != NULL);
 	KASSERT(console_out != NULL);
 
-	vfs_close(console_in->vn);
-	vfs_close(console_out->vn);
-	destroy_file_handle(console_in);
-	destroy_file_handle(console_out);
+	console_in->ref_count = 0;
+	console_out->ref_count = 0;
+	close_file_handle(console_in);
+	close_file_handle(console_out);
 }
 
 /*
@@ -197,9 +185,6 @@ boot(void)
 	COMPILE_ASSERT(sizeof(*(userptr_t)0) == sizeof(char));
 	
 	init_console();
-	kproc->files[STDIN_FILENO] = console_in;
-	kproc->files[STDOUT_FILENO] = console_out;
-	kproc->files[STDERR_FILENO] = console_out;
 }
 
 /*

@@ -3,10 +3,9 @@
  */
 
 #include <file_handle.h>
-#include <types.h>
 #include <lib.h>
-#include <clock.h>
 #include <test.h>
+#include <kern/fcntl.h>
 #include <kern/secret.h>
 #include <kern/test161.h>
 
@@ -29,20 +28,39 @@ int fhtest1(int nargs, char **args) {
     return 0;
 }
 
-// Tests cannot destory a file_handle if I already hold lock.
+// Tests can open and close file handle.
 int fhtest2(int nargs, char **args) {
     (void)nargs;
     (void)args;
 
     kprintf_n("Starting fh2...\n");
-    fh = create_file_handle("fh");
+    fh = open_file_handle("con:", O_RDONLY);
+    KASSERT(fh != NULL);
+    KASSERT(fh->flags == O_RDONLY);
+    KASSERT(fh->ref_count == 0);
+    KASSERT(fh->offset == 0);
+    KASSERT(fh->vn != NULL);
+    close_file_handle(fh);
+    fh = NULL;
+
+    success(TEST161_SUCCESS, SECRET, "fh2");
+    return 0;
+}
+
+// Tests cannot close a file_handle if I already hold lock.
+int fhtest3(int nargs, char **args) {
+    (void)nargs;
+    (void)args;
+
+    kprintf_n("Starting fh3...\n");
+    fh = open_file_handle("con:", O_WRONLY);
     KASSERT(fh != NULL);
 
     lock_acquire(fh->file_lock);
-    destroy_file_handle(fh);
+    close_file_handle(fh);
 
-	secprintf(SECRET, "Should panic...", "fh2");
-    success(TEST161_FAIL, SECRET, "fh2");
+	secprintf(SECRET, "Should panic...", "fh3");
+    success(TEST161_FAIL, SECRET, "fh3");
     return 1;
 }
 

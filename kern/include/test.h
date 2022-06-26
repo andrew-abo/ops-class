@@ -80,6 +80,7 @@ int rwtest7(int, char **);
 /* file handle tests */
 int fhtest1(int, char **);
 int fhtest2(int, char **);
+int fhtest3(int, char **);
 
 /* semaphore unit tests */
 int semu1(int, char **);

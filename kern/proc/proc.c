@@ -185,6 +185,26 @@ proc_bootstrap(void)
 }
 
 /*
+ * Copy file descriptor table of curproc to newproc.
+ */
+static void
+copy_file_descriptor_table(struct proc *dst, const struct proc *src)
+{
+	struct file_handle *fh;
+
+	KASSERT(src != NULL);
+	KASSERT(dst != NULL);
+	
+    for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
+		fh = src->files[fd];
+		dst->files[fd] = fh;
+		if (fh != NULL) {
+			fh->ref_count++;
+		}
+	}
+}
+
+/*
  * Create a fresh proc for use by runprogram.
  *
  * It will have no address space and will inherit the current
@@ -216,6 +236,7 @@ proc_create_runprogram(const char *name)
 		VOP_INCREF(curproc->p_cwd);
 		newproc->p_cwd = curproc->p_cwd;
 	}
+	copy_file_descriptor_table(newproc, curproc);
 	spinlock_release(&curproc->p_lock);
 
 	return newproc;

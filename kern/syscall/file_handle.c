@@ -4,7 +4,10 @@
 
 #include <file_handle.h>
 #include <lib.h>
+#include <limits.h>
 #include <synch.h>
+#include <vfs.h>
+#include <vnode.h>
 
 
 /*
@@ -54,17 +57,59 @@ struct file_handle
 void
 destroy_file_handle(struct file_handle *fh)
 {
-    struct lock *file_lock;
- 
     KASSERT(fh != NULL);
+    kfree(fh->name);
+    lock_destroy(fh->file_lock);
+    kfree(fh);
+}
+
+/*
+ * Returns a new file_handle for file path open with flags.
+ *
+ * Args:
+ *   path: String path of file to open.
+ *   flags: Mode flags same as open(2).
+ * 
+ * Returns:
+ *   Pointer to new file_handle if successful else NULL.
+ */
+struct file_handle
+*open_file_handle(const char *path, int flags)
+{
+    struct file_handle *fh;
+    char vfs_path[PATH_MAX];
+    struct vnode *vn;
+    const mode_t unused_mode = 0x777;
+    int result;
+
+	fh = create_file_handle(path);
+	if (fh == NULL) {
+        return NULL;
+	}
+	// vfs_open destructively uses filepath, so pass in a copy.
+	strcpy(vfs_path, path);
+	result = vfs_open(vfs_path, flags, unused_mode, &vn);
+	if (result) {
+        destroy_file_handle(fh);
+        return NULL;
+	}
+    fh->vn = vn;
+    fh->flags = flags;
+    return fh;
+}
+
+/*
+ * Closes and destroys file_handle.
+ */
+void close_file_handle(struct file_handle *fh) 
+{
+    KASSERT(fh != NULL);
+    KASSERT(fh->file_lock != NULL);
     KASSERT(lock_do_i_hold(fh->file_lock) == false);
 
     lock_acquire(fh->file_lock);
     KASSERT(fh->ref_count == 0);
-    KASSERT(fh->file_lock != NULL);
-    file_lock = fh->file_lock;
-    kfree(fh->name);
-    kfree(fh);
-    lock_release(file_lock);
-    lock_destroy(file_lock);
+    vfs_close(fh->vn);
+    lock_release(fh->file_lock);
+    destroy_file_handle(fh);
 }

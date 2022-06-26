@@ -6,6 +6,9 @@
 #include <synch.h>
 
 // File abstraction for file syscalls.
+// A file_handle is a file context, which includes an offset from the start of
+// the file where the next operation shall occur.   Multiple file_handles
+// can reference the same physical file.
 struct file_handle {
     char *name;  // String identifier for this handle.
     off_t offset;  // Byte offset from beginning of file for next operation.
@@ -17,5 +20,6 @@ struct file_handle {
 
 struct file_handle *create_file_handle(const char *);
 void destroy_file_handle(struct file_handle *);
-
+struct file_handle *open_file_handle(const char *, int);
+void close_file_handle(struct file_handle *);
 #endif
