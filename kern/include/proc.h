@@ -74,6 +74,8 @@ struct proc {
 
 	// File descriptor table
 	struct file_handle *files[FILES_PER_PROCESS_MAX];
+
+	int exit_value;
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */

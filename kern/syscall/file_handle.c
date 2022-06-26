@@ -104,12 +104,28 @@ struct file_handle
 void close_file_handle(struct file_handle *fh) 
 {
     KASSERT(fh != NULL);
-    KASSERT(fh->file_lock != NULL);
-    KASSERT(lock_do_i_hold(fh->file_lock) == false);
-
-    lock_acquire(fh->file_lock);
+    lock_file_handle(fh);
     KASSERT(fh->ref_count == 0);
     vfs_close(fh->vn);
-    lock_release(fh->file_lock);
+    release_file_handle(fh);
     destroy_file_handle(fh);
+}
+
+/*
+ * Lock a file handle.
+ */
+void lock_file_handle(struct file_handle *fh)
+{
+    KASSERT(fh != NULL);
+    KASSERT(lock_do_i_hold(fh->file_lock) == false);
+    lock_acquire(fh->file_lock);
+}
+
+/* 
+ * Release a file handle.
+ */
+void release_file_handle(struct file_handle *fh)
+{
+    KASSERT(fh != NULL);
+    lock_release(fh->file_lock);
 }

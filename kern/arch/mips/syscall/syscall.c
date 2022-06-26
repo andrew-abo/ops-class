@@ -101,6 +101,12 @@ syscall(struct trapframe *tf)
 	retval = 0;
 
 	switch (callno) {
+		case SYS_read:
+		err = sys_read((int)tf->tf_a0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2,
+		          &return_size);
+		retval = (int32_t)return_size;
+		break;
+				  
 	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
 		break;
