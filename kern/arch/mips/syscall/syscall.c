@@ -81,6 +81,7 @@ syscall(struct trapframe *tf)
 	int callno;
 	int32_t retval;
 	size_t return_size;
+	int fd;
 	int err;
 
 	KASSERT(curthread != NULL);
@@ -101,19 +102,27 @@ syscall(struct trapframe *tf)
 	retval = 0;
 
 	switch (callno) {
+		case SYS__exit:
+		panic("_exit() not implemented.");
+		break;
+
+		case SYS_open:
+		err = sys_open((const_userptr_t)tf->tf_a0, (int)tf->tf_a1, &fd);
+		retval = (int32_t)fd;
+		break;
+
 		case SYS_read:
 		err = sys_read((int)tf->tf_a0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2,
 		          &return_size);
 		retval = (int32_t)return_size;
 		break;
-				  
+
 	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
 		break;
 
 	    case SYS___time:
-		err = sys___time((userptr_t)tf->tf_a0,
-				 (userptr_t)tf->tf_a1);
+		err = sys___time((userptr_t)tf->tf_a0, (userptr_t)tf->tf_a1);
 		break;
 
 	    case SYS_write:

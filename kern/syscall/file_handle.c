@@ -2,6 +2,7 @@
 //
 // Used by the kernel not user mode.
 
+#include <kern/errno.h>
 #include <file_handle.h>
 #include <lib.h>
 #include <limits.h>
@@ -69,33 +70,36 @@ destroy_file_handle(struct file_handle *fh)
  * Args:
  *   path: String path of file to open.
  *   flags: Mode flags same as open(2).
+ *   fh: Pointer to return pointer to new file_handle.
  * 
  * Returns:
- *   Pointer to new file_handle if successful else NULL.
+ *   0 if successful else errno value.
  */
-struct file_handle
-*open_file_handle(const char *path, int flags)
+int
+open_file_handle(const char *path, int flags, struct file_handle **fh)
 {
-    struct file_handle *fh;
     char vfs_path[PATH_MAX];
     struct vnode *vn;
     const mode_t unused_mode = 0x777;
     int result;
 
-	fh = create_file_handle(path);
-	if (fh == NULL) {
-        return NULL;
+    KASSERT(path != NULL);
+    KASSERT(strlen(path) < PATH_MAX);
+	*fh = create_file_handle(path);
+	if (*fh == NULL) {
+        return EFAULT;
 	}
 	// vfs_open destructively uses filepath, so pass in a copy.
 	strcpy(vfs_path, path);
 	result = vfs_open(vfs_path, flags, unused_mode, &vn);
 	if (result) {
-        destroy_file_handle(fh);
-        return NULL;
+        destroy_file_handle(*fh);
+        *fh = NULL;
+        return result;
 	}
-    fh->vn = vn;
-    fh->flags = flags;
-    return fh;
+    (*fh)->vn = vn;
+    (*fh)->flags = flags;
+    return 0;
 }
 
 /*

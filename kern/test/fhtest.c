@@ -33,8 +33,11 @@ int fhtest2(int nargs, char **args) {
     (void)nargs;
     (void)args;
 
+    int result;
+
     kprintf_n("Starting fh2...\n");
-    fh = open_file_handle("con:", O_RDONLY);
+    result = open_file_handle("con:", O_RDONLY, &fh);
+    KASSERT(result == 0);
     KASSERT(fh != NULL);
     KASSERT(fh->flags == O_RDONLY);
     KASSERT(fh->ref_count == 0);
@@ -52,8 +55,11 @@ int fhtest3(int nargs, char **args) {
     (void)nargs;
     (void)args;
 
+    int result;
+
     kprintf_n("Starting fh3...\n");
-    fh = open_file_handle("con:", O_WRONLY);
+    result = open_file_handle("con:", O_WRONLY, &fh);
+    KASSERT(result == 0);
     KASSERT(fh != NULL);
 
     lock_acquire(fh->file_lock);

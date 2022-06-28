@@ -84,15 +84,17 @@ static struct file_handle *console_out = NULL;
 static void
 init_console()
 {
+	int result;
+
 	KASSERT(console_in == NULL);
 	KASSERT(console_out == NULL);
 
-	console_in = open_file_handle(CONSOLE, O_RDONLY);
-	if (console_in == NULL) {
+	result = open_file_handle(CONSOLE, O_RDONLY, &console_in);
+	if (result) {
 		panic("Cannot create console_in.");
 	}
-	console_out = open_file_handle(CONSOLE, O_WRONLY);
-	if (console_out == NULL) {
+	result = open_file_handle(CONSOLE, O_WRONLY, &console_out);
+	if (result) {
 		panic("Cannot create console_out.");
 	}
 	curproc->files[STDIN_FILENO] = console_in;
