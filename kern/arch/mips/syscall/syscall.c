@@ -102,6 +102,10 @@ syscall(struct trapframe *tf)
 	retval = 0;
 
 	switch (callno) {
+		case SYS_close:
+		err = sys_close((int)tf->tf_a0);
+		break;
+		
 		case SYS__exit:
 		panic("_exit() not implemented.");
 		break;

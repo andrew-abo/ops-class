@@ -16,6 +16,7 @@
 #include <kern/fcntl.h>
 #include <kern/iovec.h>
 #include <stat.h>
+#include <vfs.h>
 
 /*
  * Write to a file descriptor.
@@ -167,7 +168,7 @@ new_file_descriptor()
 }
 
 /*
- * Opens a file.
+ * Opens a file descriptor.
  *
  * Implements the process level open() system call.
  * 
@@ -221,3 +222,41 @@ new_file_descriptor()
      fh->flags = flags;
      return 0;
  }
+
+/*
+ * Closes a file descriptor.
+ *
+ * Args:
+ *   fd: File descriptor to close.
+ * 
+ * Returns:
+ *   0 on success, else errno value.
+ */
+int
+sys_close(int fd)
+{
+    struct file_handle *fh;
+
+    lock_acquire(curproc->files_lock);
+    fh = curproc->files[fd];
+    if (fh == NULL) {
+        lock_release(curproc->files_lock);
+        return EBADF;
+    }
+    lock_file_handle(fh);
+    // We have to assume vfs_close() succeeds because it does not return
+    // a status.
+    vfs_close(fh->vn);
+    // Checking ref_count atomically requires duplicating the lock releases
+    // in both clauses.
+    if(--fh->ref_count == 0) {
+        release_file_handle(fh);
+        destroy_file_handle(fh);
+        curproc->files[fd] = NULL;
+        lock_release(curproc->files_lock);
+        return 0;
+    }
+    release_file_handle(fh);
+    lock_release(curproc->files_lock);
+    return 0;
+}
