@@ -74,6 +74,7 @@ struct proc {
 
 	// File descriptor table
 	struct file_handle *files[FILES_PER_PROCESS_MAX];
+	struct lock *files_lock;
 
 	int exit_value;
 };

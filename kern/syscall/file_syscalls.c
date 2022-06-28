@@ -46,28 +46,29 @@ sys_write(int fd, const userptr_t buf, size_t buflen, size_t *bytes_out)
     if ((fd < 0) || (fd > FILES_PER_PROCESS_MAX)) {
         return EBADF;
     }
+    lock_acquire(curproc->files_lock);
     fh = curproc->files[fd];
+    lock_release(curproc->files_lock);
     if (fh == NULL) {
         return EBADF;
+    }
+    kbuf = (char *)kmalloc(buflen);
+    if (kbuf == NULL) {
+        return ENOMEM;
+    }
+    result = copyin(buf, kbuf, buflen);
+    if (result) {
+        kfree(kbuf);
+        return result;
     }
     lock_file_handle(fh);
     access = fh->flags & O_ACCMODE;
     if (access == O_RDONLY) {
+        kfree(kbuf);
         release_file_handle(fh);
         return EACCES;
     }
-    kbuf = (char *)kmalloc(buflen);
-    if (kbuf == NULL) {
-        release_file_handle(fh);
-        return ENOMEM;
-    }
     uio_kinit(&iov, &my_uio, kbuf, buflen, fh->offset, UIO_WRITE);
-    result = copyin(buf, kbuf, buflen);
-    if (result) {
-        kfree(kbuf);
-        release_file_handle(fh);
-        return result;
-    }
     result = VOP_WRITE(fh->vn, &my_uio);
     kfree(kbuf);
     if (result) {
@@ -109,20 +110,22 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
     if ((fd < 0) || (fd > FILES_PER_PROCESS_MAX)) {
         return EBADF;
     }
+    lock_acquire(curproc->files_lock);
     fh = curproc->files[fd];
+    lock_release(curproc->files_lock);
     if (fh == NULL) {
         return EBADF;
+    }
+    kbuf = (char *)kmalloc(buflen);
+    if (kbuf == NULL) {
+        return ENOMEM;
     }
     lock_file_handle(fh);
     access = fh->flags & O_ACCMODE;
     if (access == O_WRONLY) {
+        kfree(kbuf);
         release_file_handle(fh);
         return EACCES;
-    }
-    kbuf = (char *)kmalloc(buflen);
-    if (kbuf == NULL) {
-        release_file_handle(fh);
-        return ENOMEM;
     }
     uio_kinit(&iov, &my_uio, kbuf, buflen, fh->offset, UIO_READ);
     result = VOP_READ(fh->vn, &my_uio);
@@ -205,12 +208,15 @@ new_file_descriptor()
          }
          fh->offset = statbuf.st_size;
      }
+     lock_acquire(curproc->files_lock);
      *fd = new_file_descriptor();
      if (*fd < 0) {
+         lock_release(curproc->files_lock);
          destroy_file_handle(fh);
          return EMFILE;
      }
      curproc->files[*fd] = fh;
+     lock_release(curproc->files_lock);
      fh->ref_count = 1;
      fh->flags = flags;
      return 0;

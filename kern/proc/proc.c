@@ -82,6 +82,17 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
+	/* File descriptor table */
+	proc->files_lock = lock_create("files");
+	if (proc->files_lock == NULL) {
+		spinlock_cleanup(&proc->p_lock);
+		kfree(proc);
+		return NULL;
+	}
+	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
+		proc->files[fd] = NULL;
+	}
+
 	return proc;
 }
 
@@ -167,6 +178,10 @@ proc_destroy(struct proc *proc)
 
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
+
+	/* File descriptor table */
+	// TODO(aabo): close open file handles? or is that done in _exit()?
+	lock_destroy(proc->files_lock);
 
 	kfree(proc->p_name);
 	kfree(proc);
