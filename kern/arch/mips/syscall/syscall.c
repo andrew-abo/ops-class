@@ -103,9 +103,14 @@ syscall(struct trapframe *tf)
 
 	switch (callno) {
 		case SYS_close:
-		err = sys_close((int)tf->tf_a0);
+		// Close with file descriptor table locking enabled.
+		err = sys_close((int)tf->tf_a0, 1);
 		break;
-		
+
+		case SYS_dup2:
+		err = sys_dup2((int)tf->tf_a0, (int)tf->tf_a1);
+		break;
+
 		case SYS__exit:
 		panic("_exit() not implemented.");
 		break;

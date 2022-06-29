@@ -42,5 +42,6 @@ main(int argc, char **argv)
 		err(1, "read to bad file descriptor set errno to %d instead of EBADF.", errno);
 	}
 
+	success(TEST161_SUCCESS, SECRET, "/testbin/readtest");
 	return 0;
 }

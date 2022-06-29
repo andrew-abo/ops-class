@@ -42,5 +42,7 @@ main(int argc, char **argv)
 	if (errno != EBADF) {
 		err(1, "write to bad file descriptor set errno to %d instead of EBADF.", errno);
 	}
+
+	success(TEST161_SUCCESS, SECRET, "/testbin/writetest");	
 	return 0;
 }

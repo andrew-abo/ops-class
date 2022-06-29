@@ -19,6 +19,21 @@
 #include <vfs.h>
 
 /*
+ * Checks if file descriptor is in valid range.
+ *
+ * Args:
+ *   fd: File descriptor value.
+ * 
+ * Returns:
+ *   1 if is legal, else 0.
+ */
+static int
+fd_is_legal(int fd)
+{
+    return (fd >= 0) && (fd < FILES_PER_PROCESS_MAX);
+}
+
+/*
  * Write to a file descriptor.
  *
  * Implements the process level write() system call.
@@ -44,7 +59,7 @@ sys_write(int fd, const userptr_t buf, size_t buflen, size_t *bytes_out)
 
     KASSERT(bytes_out != NULL);
     *bytes_out = 0;
-    if ((fd < 0) || (fd > FILES_PER_PROCESS_MAX)) {
+    if (!fd_is_legal(fd)) {
         return EBADF;
     }
     lock_acquire(curproc->files_lock);
@@ -108,7 +123,7 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
 
     KASSERT(bytes_in != NULL);
     *bytes_in = 0;
-    if ((fd < 0) || (fd > FILES_PER_PROCESS_MAX)) {
+    if (!fd_is_legal(fd)) {
         return EBADF;
     }
     lock_acquire(curproc->files_lock);
@@ -226,22 +241,34 @@ new_file_descriptor()
 /*
  * Closes a file descriptor.
  *
+ * We need to have the option of not locking the file table for the case
+ * where we are closing a file descriptor from another system call when
+ * the table lock has already been acquired.
+ * 
  * Args:
  *   fd: File descriptor to close.
+ *   lock_fd_table: Locks file descriptor table if non-zero, else no locking.
  * 
  * Returns:
  *   0 on success else errno value.  Note vfs_close() does not return a status, 
  *   so we always return 0 unless fd is bad.
  */
 int
-sys_close(int fd)
+sys_close(int fd, int lock_fd_table)
 {
     struct file_handle *fh;
 
-    lock_acquire(curproc->files_lock);
+    if (!fd_is_legal(fd)) {
+        return EBADF;
+    }
+    if (lock_fd_table) {
+        lock_acquire(curproc->files_lock);
+    }
     fh = curproc->files[fd];
     if (fh == NULL) {
-        lock_release(curproc->files_lock);
+        if (lock_fd_table) {
+            lock_release(curproc->files_lock);
+        }
         return EBADF;
     }
     lock_file_handle(fh);
@@ -254,10 +281,45 @@ sys_close(int fd)
         release_file_handle(fh);
         destroy_file_handle(fh);
         curproc->files[fd] = NULL;
-        lock_release(curproc->files_lock);
+        if (lock_fd_table) {
+            lock_release(curproc->files_lock);
+        }
         return 0;
     }
     release_file_handle(fh);
+    if (lock_fd_table) {
+        lock_release(curproc->files_lock);
+    }
+    return 0;
+}
+
+/*
+ * Copies a file descriptor.
+ *
+ * Args:
+ *   oldfd: Source file descriptor.
+ *   newfd: Destination file descriptor to clobber.
+ * 
+ * Returns:
+ *   0 on success else errno value.
+ */
+int
+sys_dup2(int oldfd, int newfd)
+{
+    if (!fd_is_legal(oldfd) || !fd_is_legal(newfd)) {
+        return EBADF;
+    }
+    lock_acquire(curproc->files_lock);
+    if (curproc->files[oldfd] == NULL) {
+        lock_release(curproc->files_lock);
+        return EBADF;
+    }
+    if (curproc->files[newfd] != NULL) {
+        // Close without locking file descriptor table since we already
+        // have the lock and want to keep operations atomic.
+        sys_close(newfd, 0);
+    }
+    curproc->files[newfd] = curproc->files[oldfd];
     lock_release(curproc->files_lock);
     return 0;
 }
