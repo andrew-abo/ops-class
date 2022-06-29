@@ -66,6 +66,10 @@ main(int argc, char **argv)
 	if(ret) {
 		err(1, "Failed to close file\n");
 	}
+	
+	// Closing a closed descriptor should not crash, but we don't
+	// expect an error status, because that is not supported.
+	close(fd);
 
 	// Can we close 0?
 	ret = close(0);
@@ -73,6 +77,22 @@ main(int argc, char **argv)
 		err(1, "Failed to close STDIN\n");
 	}
 
+	// Test opening too many files returns an error.
+	int fd_list[1025];
+	for (int i = 0; i <= 1024; i++) {
+		fd_list[i] = open("/bin/true", O_RDONLY);
+	}
+	if (fd_list[1024] >= 0) {
+		err(-1, "Opening more than %d files should return error.", 1024);
+	}
+
+	// Test closing an open descriptor frees it.
+	close(fd_list[0]);
+	fd = open("/bin/true", O_RDONLY);
+	if (fd != fd_list[0]) {
+		err(-1, "Closing an open descriptor does not free it.");
+	}
+	close(fd);
 
 	success(TEST161_SUCCESS, SECRET, "/testbin/closetest");
 	return 0;

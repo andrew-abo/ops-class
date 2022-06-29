@@ -47,6 +47,7 @@
 #define FILENAME "readwritetest.dat"
 
 static const char *MAGIC = "h4xa0rRq0Vgbc96tiYJ^!#nXzZSAKPO";
+static const char *APPEND = "append";
 
 int
 main(int argc, char **argv)
@@ -59,6 +60,9 @@ main(int argc, char **argv)
 
 	int fd, len;
 	int expected_len = strlen(MAGIC);
+	char buf[128];
+	int result;
+	int expected;
 
 	fd = open(FILENAME, O_WRONLY | O_CREAT | O_TRUNC);
 	if(fd < 0) {
@@ -82,7 +86,6 @@ main(int argc, char **argv)
 	}
 	nprintf(".");
 
-	char buf[32];
 	len = read(fd, buf, expected_len);
 	if(len != 31) {
 		err(1, "readtest expected to read %d bytes from readtest.dat."
@@ -98,6 +101,33 @@ main(int argc, char **argv)
 	}
 	nprintf(".");
 	nprintf("\n");
+
+	// Check if append works correctly.
+	// close() may not be implemented, so re-open for append.
+	fd = open(FILENAME, O_WRONLY | O_APPEND);
+	if (fd < 0) {
+		err(-1, "Open with O_APPEND failed.");
+	}
+	result = write(fd, APPEND, strlen(APPEND));
+	if (result < (int)strlen(APPEND)) {
+		err(-1, "Write was short.");
+	}
+	// close() may not be implemented, so re-open to read from beginning.
+	fd = open(FILENAME, O_RDONLY);
+	if (fd < 0) {
+		err(-1, "Open for read failed.");
+	}
+	result = read(fd, buf, sizeof(buf));
+	expected = (int)(strlen(MAGIC) + strlen(APPEND));
+	if (result != expected) {
+		err(-1, "Expected read bytes %d, got %d", expected, result);
+	}
+	buf[result] = '\0';
+	char concatenated[64];
+	snprintf(concatenated, sizeof(concatenated), "%s%s", MAGIC, APPEND);
+	if (strcmp(buf, concatenated) != 0) {
+		err(-1, "Expected read %s, got %s", concatenated, buf);
+	}
 
 	secprintf(SECRET, MAGIC, "/testbin/readwritetest");
 	return 0;

@@ -230,7 +230,8 @@ new_file_descriptor()
  *   fd: File descriptor to close.
  * 
  * Returns:
- *   0 on success, else errno value.
+ *   0 on success else errno value.  Note vfs_close() does not return a status, 
+ *   so we always return 0 unless fd is bad.
  */
 int
 sys_close(int fd)

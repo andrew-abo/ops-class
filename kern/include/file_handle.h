@@ -24,4 +24,5 @@ void destroy_file_handle(struct file_handle *);
 void lock_file_handle(struct file_handle *);
 int open_file_handle(const char *, int, struct file_handle **);
 void release_file_handle(struct file_handle *);
-#endif
+
+#endif  // _FILE_HANDLE_H_
