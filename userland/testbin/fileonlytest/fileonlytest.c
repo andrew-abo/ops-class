@@ -78,10 +78,10 @@ main(int argc, char **argv)
 
 	tprintf("Writing %d bytes.\n", BUFFER_SIZE * BUFFER_COUNT);
 
-  // 23 Mar 2012 : GWA : Do the even-numbered writes. Test read() and
-  // lseek(SEEK_END).
+    // 23 Mar 2012 : GWA : Do the even-numbered writes. Test read() and
+    // lseek(SEEK_END).
 
-  for (i = 0; i < BUFFER_COUNT / 2; i++) {
+	for (i = 0; i < BUFFER_COUNT / 2; i++) {
 		for (j = 0; j < BUFFER_SIZE; j++) {
 			writebuf[j] = i * 2 * j;
 		}
@@ -90,42 +90,42 @@ main(int argc, char **argv)
 			err(1, "write failed");
 		}
 
-    // 23 Mar 2012 : GWA : Use lseek() to skip the odd guys.
+		// 23 Mar 2012 : GWA : Use lseek() to skip the odd guys.
 
-    target = (i + 1) * 2 * sizeof(writebuf);
-    pos = lseek(fh, sizeof(writebuf), SEEK_END);
-    if (pos != target) {
-      err(1, "(even) lseek failed: %llu != %llu", pos, target);
-    }
-  }
+		target = (i + 1) * 2 * sizeof(writebuf);
+		pos = lseek(fh, sizeof(writebuf), SEEK_END);
+		if (pos != target) {
+			err(1, "(even) lseek failed: %llu != %llu", pos, target);
+		}
+	}
 
-  target = 0;
-  pos = lseek(fh, target, SEEK_SET);
-  if (pos != target) {
-    err(1, "(reset) lseek failed: %llu != %llu", pos, target);
-  }
+	target = 0;
+	pos = lseek(fh, target, SEEK_SET);
+	if (pos != target) {
+		err(1, "(reset) lseek failed: %llu != %llu", pos, target);
+	}
 
-  // 23 Mar 2012 : GWA : Do the odd-numbered writes. Test write() and
-  // lseek(SEEK_CUR).
+	// 23 Mar 2012 : GWA : Do the odd-numbered writes. Test write() and
+	// lseek(SEEK_CUR).
 
-  for (i = 0; i < BUFFER_COUNT / 2; i++) {
+	for (i = 0; i < BUFFER_COUNT / 2; i++) {
 
-    // 23 Mar 2012 : GWA : Use lseek() to skip the even guys.
+		// 23 Mar 2012 : GWA : Use lseek() to skip the even guys.
 
-    target = ((i * 2) + 1) * sizeof(writebuf);
-    pos = lseek(fh, sizeof(writebuf), SEEK_CUR);
-    if (pos != target) {
-      err(1, "(odd) lseek failed: %llu != %llu", pos, target);
-    }
+		target = ((i * 2) + 1) * sizeof(writebuf);
+		pos = lseek(fh, sizeof(writebuf), SEEK_CUR);
+		if (pos != target) {
+			err(1, "(odd) lseek failed: %llu != %llu", pos, target);
+		}
 
-    for (j = 0; j < BUFFER_SIZE; j++) {
+		for (j = 0; j < BUFFER_SIZE; j++) {
 			writebuf[j] = ((i * 2) + 1) * j;
 		}
 		len = write(fh, writebuf, sizeof(writebuf));
 		if (len != sizeof(writebuf)) {
 			err(1, "write failed");
 		}
-  }
+	}
 
 	// 23 Mar 2012 : GWA : Read the test data back and make sure what we wrote
 	// ended up where we wrote it. Tests read() and lseek(SEEK_SET).
@@ -133,11 +133,11 @@ main(int argc, char **argv)
 	tprintf("Verifying write.\n");
 
 	for (i = BUFFER_COUNT - 1; i >= 0; i--) {
-    target = i * sizeof(writebuf);
+		target = i * sizeof(writebuf);
 		pos = lseek(fh, target, SEEK_SET);
-    if (pos != target) {
-      err(1, "(verify) lseek failed: %llu != %llu", pos, target);
-    }
+		if (pos != target) {
+			err(1, "(verify) lseek failed: %llu != %llu", pos, target);
+		}
 		len = read(fh, readbuf, sizeof(readbuf));
 		if (len != sizeof(readbuf)) {
 			err(1, "read failed");
@@ -156,7 +156,7 @@ main(int argc, char **argv)
 
 	// 23 Mar 2012 : GWA : Make sure the file is actually closed.
 
-	pos = lseek(fh, (off_t) 0, SEEK_SET);
+	pos = lseek(fh, (off_t)0, SEEK_SET);
 	if (pos == 0) {
 		err(1, "seek after close succeeded");
 	}

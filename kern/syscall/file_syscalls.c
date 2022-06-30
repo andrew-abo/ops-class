@@ -343,11 +343,7 @@ sys_lseek(int fd, off_t pos, int whence, off_t *return_offset)
     int result;
     struct file_handle *fh;
     struct stat statbuf;
-    off_t abs_offset;  // Absolute byte position relative to start of file.
-
-    kprintf("fd = %d\n", fd);
-    kprintf("pos = %lld\n", pos);
-    kprintf("whence = %d\n", whence);
+    off_t abs_offset = -1;  // Absolute byte position relative to start of file.
 
     if (!fd_is_legal(fd)) {
         return EBADF;
@@ -368,12 +364,13 @@ sys_lseek(int fd, off_t pos, int whence, off_t *return_offset)
     switch (whence) {
         case SEEK_SET:
           abs_offset = pos;
-        break;
+          break;
         case SEEK_CUR:
           abs_offset = fh->offset + pos;
-        break;
+          break;
         case SEEK_END:
-          abs_offset = statbuf.st_size - 1 + pos; 
+          abs_offset = statbuf.st_size + pos; 
+          break;
         default:
         return EINVAL;
     }

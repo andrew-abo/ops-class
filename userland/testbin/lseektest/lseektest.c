@@ -29,23 +29,42 @@ main(int argc, char **argv)
 	if (fd < 0) {
 		err(1, "Cannot open %s for write", FILENAME);
 	}
-	pos = lseek(fd, 95000, SEEK_SET);
-	printf("return pos = %lld\n", pos);
+	result = write(fd, msg, strlen(msg));
+	if (result < (int)strlen(msg)) {
+		err(1, "Error writing to %s", FILENAME);
+	}
 	close(fd);
 
-	// Test if reading file matches msg.
+	// Test SEEK_SET sets position correctly.
 	fd = open(FILENAME, O_RDONLY);
 	if (fd < 0) {
-		err(1, "Unable to open %s", FILENAME);
+		err(1, "Cannot open %s for read", FILENAME);
 	}
-	result = read(fd, buf, sizeof(buf));
-	if (result != (int)strlen(msg)) {
-        err(1, "Expected to read %d bytes, got %d", strlen(msg), result);
+	pos = lseek(fd, 5, SEEK_SET);
+	if (pos != 5) {
+		err(1, "Expected seek to 5, got %llu", pos);
 	}
-	buf[result] = '\0';
-	if (strcmp(buf, msg) != 0) {
-		err(1, "Expected to read '%s', got '%s'", msg, buf);
+	result = read(fd, buf, 1);
+	if (buf[0] != '5') {
+		err(1, "Expected to read '5', got %c", buf[0]);
 	}
+	pos = lseek(fd, -2, SEEK_CUR);
+	if (pos != 4) {
+		err(1, "Expected seek to 4, got %llu", pos);
+	}
+	result = read(fd, buf, 1);
+	if (buf[0] != '4') {
+		err(1, "Expected to read '4', to %c", buf[0]);
+	}
+	pos = lseek(fd, -1, SEEK_END);
+	if (pos != (int)strlen(msg) - 1) {
+		err(1, "Expected seek to %d, got %llu", strlen(msg) - 1, pos);
+	}
+	result = read(fd, buf, 1);
+	if (buf[0] != 'Z') {
+		err(1, "Expected to read 'Z', got %c", buf[0]);
+	}
+	close(fd);
 
 	success(TEST161_SUCCESS, SECRET, "/testbin/lseektest");
 	return 0;
