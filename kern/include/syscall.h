@@ -58,6 +58,7 @@ __DEAD void enter_new_process(int argc, userptr_t argv, userptr_t env,
 
 int sys_close(int fd, int lock_fd_table);
 int sys_dup2(int oldfd, int newdfd);
+int sys_lseek(int fd, off_t pos, int whence, off_t *abs_offset);
 int sys_open(const_userptr_t filename, int flags, int *fd);
 int sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in);
 int sys_reboot(int code);

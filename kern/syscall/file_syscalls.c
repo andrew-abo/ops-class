@@ -15,6 +15,7 @@
 #include <kern/errno.h>
 #include <kern/fcntl.h>
 #include <kern/iovec.h>
+#include <kern/seek.h>
 #include <stat.h>
 #include <vfs.h>
 
@@ -298,7 +299,7 @@ sys_close(int fd, int lock_fd_table)
  *
  * Args:
  *   oldfd: Source file descriptor.
- *   newfd: Destination file descriptor to clobber.
+ *   newfd: Destination file descriptor to clobber. Closes if open.
  * 
  * Returns:
  *   0 on success else errno value.
@@ -321,5 +322,65 @@ sys_dup2(int oldfd, int newfd)
     }
     curproc->files[newfd] = curproc->files[oldfd];
     lock_release(curproc->files_lock);
+    return 0;
+}
+
+/*
+ * Sets the file descriptor offset for next operation.
+ *
+ * Args:
+ *   fd: File descriptor.
+ *   pos: Relative or absolute offset in bytes for next operation.
+ *   whence: Enumerated type selects if pos is relative to current
+ *     position, from start or end of file.
+ * 
+ * Returns:
+ *   0 on success else errno value.
+ */
+int
+sys_lseek(int fd, off_t pos, int whence, off_t *return_offset) 
+{
+    int result;
+    struct file_handle *fh;
+    struct stat statbuf;
+    off_t abs_offset;  // Absolute byte position relative to start of file.
+
+    kprintf("fd = %d\n", fd);
+    kprintf("pos = %lld\n", pos);
+    kprintf("whence = %d\n", whence);
+
+    if (!fd_is_legal(fd)) {
+        return EBADF;
+    }
+    lock_acquire(curproc->files_lock);
+    fh = curproc->files[fd];
+    lock_release(curproc->files_lock);
+    if (fh == NULL) {
+        return EBADF;
+    }
+    if (!VOP_ISSEEKABLE(fh->vn)) {
+        return ESPIPE;
+    }
+    result = VOP_STAT(fh->vn, &statbuf);
+    if (result) {
+        return result;
+    }
+    switch (whence) {
+        case SEEK_SET:
+          abs_offset = pos;
+        break;
+        case SEEK_CUR:
+          abs_offset = fh->offset + pos;
+        break;
+        case SEEK_END:
+          abs_offset = statbuf.st_size - 1 + pos; 
+        default:
+        return EINVAL;
+    }
+    if (abs_offset < 0) {
+        return EINVAL;
+    }
+    fh->offset = abs_offset;
+    *return_offset = abs_offset;
     return 0;
 }

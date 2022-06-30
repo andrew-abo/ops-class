@@ -39,7 +39,11 @@ main(int argc, char **argv)
 	if (fd < 0) {
 		err(1, "Unable to open %s", FILENAME);
 	}
-	result = read(fd, buf, sizeof(buf));
+	result = dup2(fd, STDIN_FILENO);
+	if (result) {
+		err(1, "Expected dup2 result 0, got %d", result);
+	}
+	result = read(STDIN_FILENO, buf, sizeof(buf));
 	if (result != (int)strlen(msg)) {
         err(1, "Expected to read %d bytes, got %d", strlen(msg), result);
 	}

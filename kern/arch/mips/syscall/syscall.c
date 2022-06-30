@@ -33,9 +33,12 @@
 #include <lib.h>
 #include <mips/trapframe.h>
 #include <thread.h>
+#include <copyinout.h>
 #include <current.h>
 #include <syscall.h>
 
+#define BYTES_PER_INT 4  // MIPS dependent.
+#define STACK_OFFSET 16  // MIPS offset from SP to local variables.
 
 /*
  * System call dispatcher.
@@ -83,6 +86,11 @@ syscall(struct trapframe *tf)
 	size_t return_size;
 	int fd;
 	int err;
+	off_t pos;
+	userptr_t whence_ptr;
+	int whence;
+	off_t abs_offset;
+	char buf[BYTES_PER_INT];
 
 	KASSERT(curthread != NULL);
 	KASSERT(curthread->t_curspl == 0);
@@ -118,6 +126,32 @@ syscall(struct trapframe *tf)
 		case SYS_open:
 		err = sys_open((const_userptr_t)tf->tf_a0, (int)tf->tf_a1, &fd);
 		retval = (int32_t)fd;
+		break;
+
+		case SYS_lseek:
+		// Special handling for passing 64b value with 32b MIPS registers.
+		// a0 = fd
+		// a1 = unused for alignment
+		// a2 = pos (MSB) OS161 MIPS is big endian
+		// a3 = pos (LSB)
+		// (sp) + 16 (user stack) = whence (MSB)
+		pos = (off_t)(((off_t)(tf->tf_a2) << 32) | (tf->tf_a3));
+		// Get whence from the user stack.
+		whence_ptr = (userptr_t)tf->tf_sp + STACK_OFFSET;
+		err = copyin(whence_ptr, buf, sizeof(buf));
+		if (err) {
+			break;
+		}
+		whence =  ((int)buf[0] << 24) + 
+		          ((int)buf[1] << 16) + 
+				  ((int)buf[2] << 8) +
+				  (int)buf[3];
+		err = sys_lseek((int)tf->tf_a0, pos, whence, &abs_offset);
+		// Return 64b abs_offset in big endian format as:
+		// v0 = retval = abs_offset (MSB)
+		// v1 = abs_offset (LSB)
+		retval = (int32_t)(abs_offset >> 32);
+		tf->tf_v1 = (int32_t)(abs_offset & 0xffffffff);
 		break;
 
 		case SYS_read:
