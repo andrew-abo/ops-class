@@ -58,6 +58,7 @@ __DEAD void enter_new_process(int argc, userptr_t argv, userptr_t env,
 
 int sys___getcwd(userptr_t buf, size_t buflen, size_t *bytes_in);
 int sys___time(userptr_t user_seconds, userptr_t user_nanoseconds);
+int sys_chdir(const_userptr_t pathname);
 int sys_close(int fd, int lock_fd_table);
 int sys_dup2(int oldfd, int newdfd);
 int sys_lseek(int fd, off_t pos, int whence, off_t *abs_offset);

@@ -200,7 +200,7 @@ new_file_descriptor()
  sys_open(const_userptr_t filename, int flags, int *fd)
  {
      char kfilename[PATH_MAX];
-     unsigned filename_len;
+     size_t filename_len;
      struct file_handle *fh;
      struct stat statbuf;
      int result;
@@ -420,5 +420,34 @@ sys___getcwd(userptr_t buf, size_t buflen, size_t *bytes_in)
         return result;
     }
     *bytes_in = my_uio.uio_offset;
+    return 0;
+}
+
+/*
+ * Sets current working directory for current thread.
+ *
+ * Args:
+ *   pathname: Pointer to path string.
+ * 
+ * Returns:
+ *   0 on success, else errno value.
+ */
+int
+sys_chdir(const_userptr_t pathname)
+{
+    char kpathname[PATH_MAX];
+    size_t pathname_len;
+    int result;
+
+    result = copyinstr(pathname, kpathname, PATH_MAX, &pathname_len);
+    if (result) {
+        return result;
+    }
+    lock_acquire(curproc->p_cwd_lock);
+    result = vfs_chdir(kpathname);
+    lock_release(curproc->p_cwd_lock);
+    if (result) {
+        return result;
+    }
     return 0;
 }
