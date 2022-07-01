@@ -110,6 +110,19 @@ syscall(struct trapframe *tf)
 	retval = 0;
 
 	switch (callno) {
+		case SYS__exit:
+		panic("_exit() not implemented.");
+		break;
+
+		case SYS___getcwd:
+		err = sys___getcwd((userptr_t)tf->tf_a0, (size_t)tf->tf_a1, &return_size);
+		retval = (int32_t)return_size;
+		break;
+
+	    case SYS___time:
+		err = sys___time((userptr_t)tf->tf_a0, (userptr_t)tf->tf_a1);
+		break;
+
 		case SYS_close:
 		// Close with file descriptor table locking enabled.
 		err = sys_close((int)tf->tf_a0, 1);
@@ -117,15 +130,6 @@ syscall(struct trapframe *tf)
 
 		case SYS_dup2:
 		err = sys_dup2((int)tf->tf_a0, (int)tf->tf_a1);
-		break;
-
-		case SYS__exit:
-		panic("_exit() not implemented.");
-		break;
-
-		case SYS_open:
-		err = sys_open((const_userptr_t)tf->tf_a0, (int)tf->tf_a1, &fd);
-		retval = (int32_t)fd;
 		break;
 
 		case SYS_lseek:
@@ -154,6 +158,11 @@ syscall(struct trapframe *tf)
 		tf->tf_v1 = (int32_t)(abs_offset & 0xffffffff);
 		break;
 
+		case SYS_open:
+		err = sys_open((const_userptr_t)tf->tf_a0, (int)tf->tf_a1, &fd);
+		retval = (int32_t)fd;
+		break;
+
 		case SYS_read:
 		err = sys_read((int)tf->tf_a0, (userptr_t)tf->tf_a1, (size_t)tf->tf_a2,
 		          &return_size);
@@ -162,10 +171,6 @@ syscall(struct trapframe *tf)
 
 	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
-		break;
-
-	    case SYS___time:
-		err = sys___time((userptr_t)tf->tf_a0, (userptr_t)tf->tf_a1);
 		break;
 
 	    case SYS_write:

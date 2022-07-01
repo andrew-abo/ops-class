@@ -71,6 +71,7 @@ struct proc {
 
 	/* VFS */
 	struct vnode *p_cwd;		/* current working directory */
+	struct lock *p_cwd_lock;
 
 	// File descriptor table
 	struct file_handle *files[FILES_PER_PROCESS_MAX];

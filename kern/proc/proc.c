@@ -81,11 +81,18 @@ proc_create(const char *name)
 
 	/* VFS fields */
 	proc->p_cwd = NULL;
+	proc->p_cwd_lock = lock_create("p_cwd");
+	if (proc->p_cwd_lock == NULL) {
+		spinlock_cleanup(&proc->p_lock);
+		kfree(proc);
+		return NULL;
+	}
 
 	/* File descriptor table */
 	proc->files_lock = lock_create("files");
 	if (proc->files_lock == NULL) {
 		spinlock_cleanup(&proc->p_lock);
+		lock_destroy(proc->p_cwd_lock);
 		kfree(proc);
 		return NULL;
 	}

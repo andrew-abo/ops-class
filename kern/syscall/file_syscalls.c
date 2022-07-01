@@ -381,3 +381,44 @@ sys_lseek(int fd, off_t pos, int whence, off_t *return_offset)
     *return_offset = abs_offset;
     return 0;
 }
+
+/*
+ * Gets current working directory for current thread.
+ *
+ * Args:
+ *   buf: Pointer to buffer to return (unterminated) path string.
+ *   buflen: Size of buf in bytes.
+ *   bytes_in: Pointer to return actual number of bytes read.
+ * 
+ * Returns:
+ *   0 on success, else errno value.
+ */
+int
+sys___getcwd(userptr_t buf, size_t buflen, size_t *bytes_in)
+{
+    struct iovec iov;
+    struct uio my_uio;
+    char *kbuf;
+    int result;
+
+    KASSERT(bytes_in != NULL);
+    kbuf = (char *)kmalloc(buflen);
+    if (kbuf == NULL) {
+        return ENOMEM;
+    }
+    uio_kinit(&iov, &my_uio, kbuf, buflen, 0, UIO_READ);
+    lock_acquire(curproc->p_cwd_lock);
+    result = vfs_getcwd(&my_uio);
+    lock_release(curproc->p_cwd_lock);
+    if (result) {
+        kfree(kbuf);
+        return result;
+    }
+    result = copyout(kbuf, buf, buflen);
+    kfree(kbuf);
+    if (result) {
+        return result;
+    }
+    *bytes_in = my_uio.uio_offset;
+    return 0;
+}
