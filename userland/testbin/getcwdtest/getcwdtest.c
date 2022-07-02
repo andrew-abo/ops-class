@@ -1,7 +1,7 @@
 /*
  * getcwdtest.c
  *
- * 	Tests __getcwd syscall.
+ * 	Tests __getcwd syscall via libc getcwd().
  */
 
 #include <unistd.h>
@@ -19,14 +19,13 @@ main(int argc, char **argv)
 	(void)argv;
 
 	char buf[128];
-	int result;
+	char *result;
 
 	errno = 0;
-	result = __getcwd(buf, sizeof(buf));
-	if (result < 0) {
+	result = getcwd(buf, sizeof(buf));
+	if (result == NULL) {
 		err(1, "getcwd returned errno %d", errno);
 	}
-	buf[result] = '\0';
 	if (strcmp(buf, DEFAULTCWD) != 0) {
 		err(1, "From getcwd expected %s, got %s", DEFAULTCWD, buf);
 	}
