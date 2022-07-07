@@ -39,10 +39,13 @@
 #include <file_handle.h>
 #include <limits.h>
 #include <spinlock.h>
+#include <thread.h>
 
 struct addrspace;
 struct thread;
 struct vnode;
+
+typedef threadstate_t procstate_t;
 
 /*
  * Process structure.
@@ -63,8 +66,14 @@ struct vnode;
  */
 struct proc {
 	char *p_name;			/* Name of this process */
-	struct spinlock p_lock;		/* Lock for this structure */
+	pid_t pid;  // My process ID.
+	pid_t ppid;  // My parent's process ID.
 	unsigned p_numthreads;		/* Number of threads in this process */
+	procstate_t p_state;
+	int exit_code;  // Only valid if p_state == S_ZOMBIE.
+	struct cv *waitpid_cv;  // Wait channel for blocking until I exit.
+	struct lock *waitpid_lock;  // Lock for the wait channel.
+	struct spinlock p_lock;		/* Lock for this structure */
 
 	/* VM */
 	struct addrspace *p_addrspace;	/* virtual address space */
@@ -77,7 +86,9 @@ struct proc {
 	struct file_handle *files[FILES_PER_PROCESS_MAX];
 	struct lock *files_lock;
 
-	int exit_value;
+	// Process are stored in a linked list sorted by increasing pid.
+	struct proc *next;  // Higher pid.
+	struct proc *prev;  // Lower pid.
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */
@@ -85,6 +96,9 @@ extern struct proc *kproc;
 
 /* Call once during system startup to allocate data structures. */
 void proc_bootstrap(void);
+
+/* Create an empty process object */
+struct proc *proc_create(const char *name);
 
 /* Create a fresh process for use by runprogram(). */
 struct proc *proc_create_runprogram(const char *name);

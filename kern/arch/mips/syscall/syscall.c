@@ -91,6 +91,7 @@ syscall(struct trapframe *tf)
 	int whence;
 	off_t abs_offset;
 	char buf[BYTES_PER_INT];
+	pid_t pid;
 
 	KASSERT(curthread != NULL);
 	KASSERT(curthread->t_curspl == 0);
@@ -134,6 +135,11 @@ syscall(struct trapframe *tf)
 
 		case SYS_dup2:
 		err = sys_dup2((int)tf->tf_a0, (int)tf->tf_a1);
+		break;
+
+		case SYS_fork:
+		err = sys_fork(&pid);
+		retval = (int32_t)pid;
 		break;
 
 		case SYS_lseek:

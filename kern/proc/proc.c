@@ -56,8 +56,10 @@ struct proc *kproc;
 
 /*
  * Create a proc structure.
+ *
+ * Note this does not populate the fields with viable values,
+ * it just allocates all the data structures.
  */
-static
 struct proc *
 proc_create(const char *name)
 {
@@ -72,8 +74,24 @@ proc_create(const char *name)
 		kfree(proc);
 		return NULL;
 	}
-
+	proc->pid = 0;
+	proc->ppid = 0;
 	proc->p_numthreads = 0;
+	proc->p_state = S_READY;
+	proc->exit_code = 0;
+	proc->waitpid_cv = cv_create("waitpid");
+	if (proc->waitpid_cv == NULL) {
+		kfree(proc->p_name);
+		kfree(proc);
+		return NULL;
+	}
+	proc->waitpid_lock = lock_create("waitpid");
+	if (proc->waitpid_lock == NULL) {
+		cv_destroy(proc->waitpid_cv);
+		kfree(proc->p_name);
+		kfree(proc);
+		return NULL;
+	}
 	spinlock_init(&proc->p_lock);
 
 	/* VM fields */
@@ -84,6 +102,9 @@ proc_create(const char *name)
 	proc->p_cwd_lock = lock_create("p_cwd");
 	if (proc->p_cwd_lock == NULL) {
 		spinlock_cleanup(&proc->p_lock);
+		lock_destroy(proc->waitpid_lock);
+		cv_destroy(proc->waitpid_cv);
+		kfree(proc->p_name);
 		kfree(proc);
 		return NULL;
 	}
@@ -91,14 +112,20 @@ proc_create(const char *name)
 	/* File descriptor table */
 	proc->files_lock = lock_create("files");
 	if (proc->files_lock == NULL) {
+		lock_destroy(proc->p_cwd_lock);		
 		spinlock_cleanup(&proc->p_lock);
-		lock_destroy(proc->p_cwd_lock);
+		lock_destroy(proc->waitpid_lock);
+		cv_destroy(proc->waitpid_cv);
+		kfree(proc->p_name);
 		kfree(proc);
 		return NULL;
 	}
 	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
 		proc->files[fd] = NULL;
 	}
+
+	proc->next = NULL;
+	proc->prev = NULL;
 
 	return proc;
 }
