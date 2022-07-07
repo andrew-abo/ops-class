@@ -1,7 +1,7 @@
 ---
 name: "RW Lock Test 1"
 description:
-  Tests create/destory reader-writer locksssss.
+  Tests create/destory reader-writer locks.
 tags: [synch, rwlocks, kleaks]
 depends: [boot, semaphores]
 sys161:

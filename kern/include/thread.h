@@ -49,6 +49,7 @@ struct cpu;
 /* Size of kernel stacks; must be power of 2 */
 #define STACK_SIZE 4096
 #define MAX_NAME_LENGTH 64
+#define STACK_OFFSET 16  // MIPS offset from SP to local variables.
 
 /* Mask for extracting the stack base address of a kernel stack pointer */
 #define STACK_MASK  (~(vaddr_t)(STACK_SIZE-1))
@@ -89,7 +90,7 @@ struct thread {
 	 */
 	struct thread_machdep t_machdep; /* Any machine-dependent goo */
 	struct threadlistnode t_listnode; /* Link for run/sleep/zombie lists */
-	void *t_stack;			/* Kernel-level stack */
+	void *t_stack;			/* Starting address of kernel-level stack */
 	struct switchframe *t_context;	/* Saved register context (on stack) */
 	struct cpu *t_cpu;		/* CPU thread runs on */
 	struct proc *t_proc;		/* Process thread belongs to */
@@ -118,6 +119,20 @@ struct thread {
 
 	/* add more here as needed */
 };
+
+// A saved snapshot of a thread's kernel side stack
+// starting at the trapfrrame.
+struct stackimage {
+       size_t size;  // Image size in bytes.
+       void *bottom;  // Lowest address
+       struct trapframe *tf;  // bottom + 16.
+};
+
+struct stackimage *stackimage_create(void);
+void stackimage_destroy(struct stackimage *image);
+int stackimage_save(struct thread *t, struct trapframe *tf, 
+                    struct stackimage *image);
+int stackimage_load(struct thread *t, struct stackimage *image);
 
 /*
  * Array of threads.

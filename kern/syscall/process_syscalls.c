@@ -13,15 +13,9 @@
 #include <proc.h>
 #include <kern/errno.h>
 
-
-void
-enter_forked_process()
-{
-	// TODO(aabo): copy parent stack image to child.
-	// modify trapframe to return pid=0
-    // thread_fork(entrypoint=enter_forked_process)
-	mips_usermode(tf);
-}
+// TODO(aabo): Replace with linked list.
+//static pid_t next_pid = PID_MIN;
+//static proc *processes[128];
 
 /*
  * Spawn a new process.
@@ -42,6 +36,7 @@ int sys_fork(pid_t *pid)
         return EFAULT;
     }
     parent = curproc;
+    (void)parent;
     child = proc_create("fork");
     if (child == NULL) {
         return ENOMEM;

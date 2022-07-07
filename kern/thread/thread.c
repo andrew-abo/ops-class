@@ -1254,3 +1254,92 @@ void thread_wait_for_count(unsigned tc)
 	}
 	spinlock_release(&thread_count_lock);
 }
+
+///////////////////////////////////////////////////////////
+//
+// Stack operations.
+//
+
+struct stackimage 
+*stackimage_create()
+{
+	struct stackimage *image;
+	image = (struct stackimage *)kmalloc(sizeof(struct stackimage));
+	if (image == NULL) {
+		return NULL;
+	}
+	image->size = 0;
+	image->bottom = NULL;
+	image->tf = NULL;
+	return image;
+}
+
+void 
+stackimage_destroy(struct stackimage *image)
+{
+    KASSERT(image != NULL);
+	//KASSERT(image->bottom != NULL);
+	if (image->bottom) {
+        kfree(image->bottom);    
+	}
+	kfree(image);
+}
+
+/*
+ * Saves snapshot of thread t starting at trapframe.
+ *
+ * Args:
+ *   t: Thread whose stack to save.
+ *   tf: Pointer to trapframe on thread stack.
+ *   image: Pointer to container for image.
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
+int 
+stackimage_save(struct thread *t, struct trapframe *tf, 
+                struct stackimage *image)
+{
+	char *src_start;
+	char *src_end;
+
+	KASSERT(t != NULL);
+	KASSERT(tf != NULL);
+	KASSERT(SAME_STACK((vaddr_t)(t->t_stack), (vaddr_t)tf));
+	// Only save from trapframe upwards. Any stackframes below that 
+	// get discarded.
+	src_start = ((char *)tf) - STACK_OFFSET;
+	src_end = ((char *)(t->t_stack)) + STACK_SIZE;
+	image->size = src_end - src_start;
+	KASSERT(image->size > 0);
+	image->bottom = kmalloc(image->size);
+	if (image->bottom == NULL) {
+		return ENOMEM;
+	}
+	kprintf("memcpy(%p, %p, 0x%x(%u))\n", (void*)(image->bottom), (void*)src_start, image->size, image->size);
+	memcpy(image->bottom, (void *)src_start, image->size);
+	image->tf = (struct trapframe *)(((char *)(image->bottom)) + STACK_OFFSET);
+	return 0;
+}
+
+/* 
+ * Loads a snapshot of thread stack overwriting existing stack.
+ *
+ * Args:
+ *   t: Thread to load image into.
+ *   image: Stack image to load.
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
+int
+stackimage_load(struct thread *t, struct stackimage *image)
+{
+	KASSERT(t != NULL);
+	KASSERT(image != NULL);
+	KASSERT(SAME_STACK((vaddr_t)(image->bottom), (vaddr_t)(image->tf)));
+    bzero(t->t_stack, STACK_SIZE);
+	memcpy(t->t_stack, image->bottom, image->size);
+	return 0;
+}
+ 

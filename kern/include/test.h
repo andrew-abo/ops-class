@@ -57,6 +57,8 @@ int threadlisttest(int, char **);
 int threadtest(int, char **);
 int threadtest2(int, char **);
 int threadtest3(int, char **);
+int threadtest4(int, char **);
+int threadtest5(int, char **);
 int semtest(int, char **);
 int locktest(int, char **);
 int locktest2(int, char **);
@@ -76,6 +78,9 @@ int rwtest4(int, char **);
 int rwtest5(int, char **);
 int rwtest6(int, char **);
 int rwtest7(int, char **);
+
+/* process tests */
+int proctest1(int, char **);
 
 /* file handle tests */
 int fhtest1(int, char **);

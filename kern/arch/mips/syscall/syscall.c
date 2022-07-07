@@ -38,7 +38,6 @@
 #include <syscall.h>
 
 #define BYTES_PER_INT 4  // MIPS dependent.
-#define STACK_OFFSET 16  // MIPS offset from SP to local variables.
 
 /*
  * System call dispatcher.
@@ -236,4 +235,9 @@ void
 enter_forked_process(struct trapframe *tf)
 {
 	(void)tf;
+	// TODO(aabo): copy parent stack image to child.
+	// modify trapframe to return pid=0
+    // thread_fork(entrypoint=enter_forked_process)
+	mips_usermode(tf);
 }
+

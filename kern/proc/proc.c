@@ -210,13 +210,12 @@ proc_destroy(struct proc *proc)
 		as_destroy(as);
 	}
 
+	lock_destroy(proc->p_cwd_lock);
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
-
-	/* File descriptor table */
-	// TODO(aabo): close open file handles? or is that done in _exit()?
 	lock_destroy(proc->files_lock);
-
+	lock_destroy(proc->waitpid_lock);
+	cv_destroy(proc->waitpid_cv);
 	kfree(proc->p_name);
 	kfree(proc);
 }

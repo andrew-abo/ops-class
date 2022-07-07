@@ -35,6 +35,7 @@
 #include <thread.h>
 #include <synch.h>
 #include <test.h>
+#include <current.h>
 
 #define NTHREADS  8
 
@@ -144,3 +145,59 @@ threadtest2(int nargs, char **args)
 
 	return 0;
 }
+
+// threadtest3 see tt3.c
+
+// Tests stack images can be created and destroyed.
+int
+threadtest4(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+
+	struct stackimage *image;
+
+	kprintf("Starting thread test 4...\n");
+	image = stackimage_create();
+	KASSERT(image != NULL);
+	stackimage_destroy(image);
+	kprintf("\nThread test 4 done.\n");
+
+	return 0;
+}
+
+// Tests stack images can be saved and loaded.
+int
+threadtest5(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+
+	int result;
+	char *dummy_stack;
+	struct stackimage *image;
+	struct trapframe *dummy_tf;
+	struct thread dummy_thread;
+
+	kprintf("Starting thread test 5...\n");
+	image = stackimage_create();
+	kprintf("sizeof(struct stackimage) = %u\n", sizeof(struct stackimage));
+	KASSERT(image != NULL);
+	dummy_stack = kmalloc(STACK_SIZE);
+	KASSERT(dummy_stack != NULL);
+	dummy_tf = (struct trapframe *)(dummy_stack + STACK_OFFSET);
+	dummy_thread.t_stack = dummy_stack;
+	result = stackimage_save(&dummy_thread, dummy_tf, image);
+	KASSERT(result == 0);
+	KASSERT(image->size == STACK_SIZE);
+	result = stackimage_load(&dummy_thread, image);
+	KASSERT(result == 0);
+	kprintf("threadtest5: image = %p\n", image);
+	stackimage_destroy(image);
+	kfree(dummy_stack);
+	kprintf("\nThread test 5 done.\n");
+
+	return 0;
+}
+
+
