@@ -217,6 +217,7 @@ proc_destroy(struct proc *proc)
 	lock_destroy(proc->waitpid_lock);
 	cv_destroy(proc->waitpid_cv);
 	kfree(proc->p_name);
+	// TODO(aabo): close open file descriptors.
 	kfree(proc);
 }
 
@@ -235,7 +236,7 @@ proc_bootstrap(void)
 /*
  * Copy file descriptor table of curproc to newproc.
  */
-static void
+void
 copy_file_descriptor_table(struct proc *dst, const struct proc *src)
 {
 	struct file_handle *fh;

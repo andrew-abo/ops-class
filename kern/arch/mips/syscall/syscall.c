@@ -137,7 +137,7 @@ syscall(struct trapframe *tf)
 		break;
 
 		case SYS_fork:
-		err = sys_fork(&pid);
+		err = sys_fork(&pid, tf);
 		retval = (int32_t)pid;
 		break;
 

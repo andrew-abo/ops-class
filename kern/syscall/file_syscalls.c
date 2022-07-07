@@ -272,16 +272,17 @@ sys_close(int fd, int lock_fd_table)
         }
         return EBADF;
     }
+    curproc->files[fd] = NULL;
     lock_file_handle(fh);
-    // We have to assume vfs_close() succeeds because it does not return
-    // a status.
-    vfs_close(fh->vn);
     // Checking ref_count atomically requires duplicating the lock releases
     // in both clauses.
-    if(--fh->ref_count == 0) {
+    fh->ref_count--;
+    if (fh->ref_count == 0) {
+        // We have to assume vfs_close() succeeds because it does not return
+        // a status.
+        vfs_close(fh->vn);
         release_file_handle(fh);
         destroy_file_handle(fh);
-        curproc->files[fd] = NULL;
         if (lock_fd_table) {
             lock_release(curproc->files_lock);
         }
@@ -307,8 +308,13 @@ sys_close(int fd, int lock_fd_table)
 int
 sys_dup2(int oldfd, int newfd)
 {
+    struct file_handle *fh;
+
     if (!fd_is_legal(oldfd) || !fd_is_legal(newfd)) {
         return EBADF;
+    }
+    if (oldfd == newfd) {
+        return 0;
     }
     lock_acquire(curproc->files_lock);
     if (curproc->files[oldfd] == NULL) {
@@ -321,6 +327,10 @@ sys_dup2(int oldfd, int newfd)
         sys_close(newfd, 0);
     }
     curproc->files[newfd] = curproc->files[oldfd];
+    fh = curproc->files[newfd];
+    lock_file_handle(fh);
+    fh->ref_count++;
+    release_file_handle(fh);
     lock_release(curproc->files_lock);
     return 0;
 }
