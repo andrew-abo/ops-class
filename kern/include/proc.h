@@ -88,7 +88,6 @@ struct proc {
 
 	// Process are stored in a linked list sorted by increasing pid.
 	struct proc *next;  // Higher pid.
-	struct proc *prev;  // Lower pid.
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */
@@ -120,5 +119,9 @@ struct addrspace *proc_getas(void);
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *proc_setas(struct addrspace *);
 
+/* Insert newproc into linked list sorted by pid */ 
+int proclist_insert(struct proc *newproc);
+
+struct proc *proclist_remove(pid_t pid);
 
 #endif /* _PROC_H_ */

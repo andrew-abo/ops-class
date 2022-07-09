@@ -80,6 +80,7 @@ int rwtest7(int, char **);
 
 /* process tests */
 int proctest1(int, char **);
+int proctest2(int, char **);
 
 /* file handle tests */
 int fhtest1(int, char **);

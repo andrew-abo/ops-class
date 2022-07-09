@@ -13,8 +13,7 @@
 #include <spinlock.h>
 
 #define CREATELOOPS 4
-
-static bool test_status = TEST161_FAIL;
+#define NEWPROCS 5
 
 // Tests proc objects can be created and destroyed.
 int
@@ -35,10 +34,56 @@ proctest1(int nargs, char **args)
 		}
         proc_destroy(proc);
 	}
-	test_status = TEST161_SUCCESS;
 
 	kprintf_t("\n");
-	success(test_status, SECRET, "proc1");
+	success(TEST161_SUCCESS, SECRET, "proc1");
+
+	return 0;
+}
+
+// Tests processes can be added and removed from proclist.
+int
+proctest2(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+
+	struct proc *newproc[NEWPROCS];
+	struct proc *p;
+	int i;
+	int result;
+
+	// Test creating a sequential list of pids.
+	for (i = 0; i < NEWPROCS; i++) {
+		newproc[i] = proc_create("new");
+		KASSERT(newproc[i] != NULL);
+		result = proclist_insert(newproc[i]);
+		KASSERT(result == 0);
+		KASSERT(newproc[i]->pid == PID_MIN + i);
+	}
+
+	// Delete one pid in the middle.
+	i = 2;
+	p = proclist_remove(PID_MIN + i);
+	KASSERT(p != NULL);
+	proc_destroy(p);
+
+	// Insert into the gap.
+	p = proc_create("new");
+	KASSERT(p != NULL);
+	result = proclist_insert(p);
+	KASSERT(result == 0);
+	KASSERT(p->pid == PID_MIN + i);
+	
+	// Delete all the procs.
+	for (i = 0; i < NEWPROCS; i++) {
+		p = proclist_remove(PID_MIN + i);
+		KASSERT(p != NULL);
+		proc_destroy(p);
+	}
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "proc2");
 
 	return 0;
 }

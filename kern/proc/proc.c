@@ -54,6 +54,9 @@
  */
 struct proc *kproc;
 
+// Linked list of user processes.
+static struct proc *proclist = NULL;
+
 /*
  * Create a proc structure.
  *
@@ -125,7 +128,6 @@ proc_create(const char *name)
 	}
 
 	proc->next = NULL;
-	proc->prev = NULL;
 
 	return proc;
 }
@@ -395,4 +397,79 @@ proc_setas(struct addrspace *newas)
 	proc->p_addrspace = newas;
 	spinlock_release(&proc->p_lock);
 	return oldas;
+}
+
+/*
+ * Insert newproc into proclist sorted by pid.
+ *
+ * Args:
+ *   newproc: Pointer to new process to insert.
+ * 
+ * Returns:
+ *   0 on success, else 1.
+ */   
+int
+proclist_insert(struct proc *newproc)
+{
+    struct proc *p;
+	struct proc *prev;
+
+	KASSERT(newproc != NULL);
+	prev = NULL;
+	for (p = proclist; p != NULL; p = p->next) {
+		if (p->pid == PID_MAX) {
+			return 1;
+		}
+		if (prev != NULL) {
+            KASSERT(p->pid > prev->pid);
+            if (p->pid - prev->pid > 1) {
+                newproc->pid = prev->pid + 1;
+                prev->next = newproc;
+                newproc->next = p;
+                return 0;
+            }
+		}
+		prev = p;
+	}
+	newproc->next = NULL;	
+	if (prev == NULL) {
+		newproc->pid = PID_MIN;
+		proclist = newproc;
+		return 0;
+	}
+	prev->next = newproc;
+	newproc->pid = (prev->pid) + 1;
+	return 0;
+}
+
+/*
+ * Removes process with specified pid from proclist.
+ *
+ * Does not modify the process or free any memory.
+ * 
+ * Args:
+ *   pid: Process ID to remove.
+ * 
+ * Returns:
+ *   Pointer to proc removed else NULL if not found.
+ */
+struct proc *proclist_remove(pid_t pid)
+{
+	struct proc *p;
+	struct proc *prev;
+
+	KASSERT((pid >= PID_MIN) && (pid <= PID_MAX));
+	prev = NULL;
+	for (p = proclist; p != NULL; p = p->next) {
+		if (p->pid == pid) {
+            if (prev == NULL) {
+				proclist = p->next;
+				return p;
+			}
+			prev->next = p->next;
+			return p;
+		}
+		prev = p;
+	}
+	return NULL;
 }
