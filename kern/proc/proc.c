@@ -47,6 +47,7 @@
 #include <proc.h>
 #include <current.h>
 #include <addrspace.h>
+#include <synch.h>
 #include <vnode.h>
 
 /*
@@ -56,6 +57,7 @@ struct proc *kproc;
 
 // Linked list of user processes.
 static struct proc *proclist = NULL;
+static struct lock *proclist_lock;
 
 /*
  * Create a proc structure.
@@ -472,4 +474,36 @@ struct proc *proclist_remove(pid_t pid)
 		prev = p;
 	}
 	return NULL;
+}
+
+/*
+ * Initalizes global process list.
+ *
+ * Returns:
+ *   0 on success, else 1.
+ */
+int proclist_init()
+{
+    proclist = NULL;
+	proclist_lock = lock_create("proclist");
+	if (proclist == NULL) {
+		return 1;
+	}
+	return 0;
+}
+
+void proclist_teardown()
+{
+	KASSERT(proclist_lock != NULL);
+	lock_destroy(proclist_lock);
+}
+
+void proclist_lock_acquire()
+{
+	lock_acquire(proclist_lock);
+}
+
+void proclist_lock_release()
+{
+	lock_release(proclist_lock);
 }

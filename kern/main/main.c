@@ -187,6 +187,7 @@ boot(void)
 	COMPILE_ASSERT(sizeof(*(userptr_t)0) == sizeof(char));
 	
 	init_console();
+	proclist_init();
 }
 
 /*
@@ -205,6 +206,7 @@ shutdown(void)
 
 	thread_shutdown();
 	tear_down_console();
+	proclist_teardown();
 
 	splhigh();
 }

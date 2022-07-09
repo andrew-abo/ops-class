@@ -14,10 +14,6 @@
 #include <proc.h>
 #include <kern/errno.h>
 
-// TODO(aabo): Replace with linked list.
-static pid_t next_pid = PID_MIN;
-static struct proc *processes[128];
-
 /*
  * Returns a heap allocated copy of trapframe.
  *
@@ -101,9 +97,11 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
         proc_destroy(child);
         return result;
     }
-    // TODO(aabo): replace with a linked list.
-    child->pid = next_pid++;
-    processes[child->pid] = child;
+
+    proclist_lock_acquire();
+    proclist_insert(child);
+    proclist_lock_release();
+
     // Child returns via enter_forked_process().
     result = thread_fork("fork", child, enter_forked_process, (void *)tf_copy, 0);
     if (result) {
