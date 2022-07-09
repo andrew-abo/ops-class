@@ -55,12 +55,8 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     struct trapframe *tf_copy;
     int result;
 
-    if (pid == NULL) {
-        return EINVAL;
-    }
-    if (tf == NULL) {
-        return EINVAL;
-    }
+    KASSERT(pid != NULL);
+    KASSERT(tf != NULL);
     parent = curproc;
     child = proc_create("fork");
     if (child == NULL) {
