@@ -148,53 +148,52 @@ threadtest2(int nargs, char **args)
 
 // threadtest3 see tt3.c
 
-// Tests stack images can be created and destroyed.
+// Tests trapframe can be saved and loaded.
 int
 threadtest4(int nargs, char **args)
 {
 	(void)nargs;
 	(void)args;
 
-	struct stackimage *image;
-
-	kprintf("Starting thread test 4...\n");
-	image = stackimage_create();
-	KASSERT(image != NULL);
-	stackimage_destroy(image);
-	kprintf("\nThread test 4 done.\n");
-
-	return 0;
-}
-
-// Tests stack images can be saved and loaded.
-int
-threadtest5(int nargs, char **args)
-{
-	(void)nargs;
-	(void)args;
-
 	int result;
-	char *dummy_stack;
-	struct stackimage *image;
-	struct trapframe *dummy_tf;
-	struct thread dummy_thread;
+	char *src_stack;
+	char *dst_stack;
+	struct trapframe *src_tf;
+	struct trapframe *dst_tf;
+	struct trapframe *tf_copy;
+	struct thread src_thread;
+	struct thread dst_thread;
 
 	kprintf("Starting thread test 5...\n");
-	image = stackimage_create();
-	KASSERT(image != NULL);
-	dummy_stack = kmalloc(STACK_SIZE);
-	KASSERT(dummy_stack != NULL);
-	dummy_tf = (struct trapframe *)(dummy_stack + STACK_OFFSET);
-	dummy_thread.t_stack = dummy_stack;
-	result = stackimage_save(&dummy_thread, dummy_tf, image);
+
+	// Create mock source thread.
+	src_stack = kmalloc(STACK_SIZE);
+	KASSERT(src_stack != NULL);
+	bzero(src_stack, STACK_SIZE);
+	// Arbitrary location on source thread stack.
+	src_tf = (struct trapframe *)(src_stack + 512);
+	src_thread.t_stack = src_stack;
+	thread_checkstack_init(&src_thread);
+	thread_checkstack(&src_thread);
+
+	// Create mock destination thread.
+	dst_stack = kmalloc(STACK_SIZE);
+	KASSERT(dst_stack != NULL);
+	bzero(dst_stack, STACK_SIZE);
+	dst_thread.t_stack = dst_stack;
+	thread_checkstack_init(&dst_thread);
+	thread_checkstack(&dst_thread);
+
+	// Copy trapframe from source to destination.
+	result = trapframe_save(&tf_copy, src_tf);
 	KASSERT(result == 0);
-	KASSERT(image->size == STACK_SIZE);
-	result = stackimage_load(&dummy_thread, image);
+	result = trapframe_load(&dst_thread, &dst_tf, tf_copy);
 	KASSERT(result == 0);
-	kprintf("threadtest5: image = %p\n", image);
-	stackimage_destroy(image);
-	kfree(dummy_stack);
-	kprintf("\nThread test 5 done.\n");
+	thread_checkstack(&dst_thread);
+	kfree(tf_copy);
+	kfree(src_stack);
+	kfree(dst_stack);
+	kprintf("\nThread test 4 done.\n");
 
 	return 0;
 }

@@ -85,14 +85,8 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
         proc_destroy(child);
         return ENOMEM;
     }
-    image = stackimage_create();
-    if (image == NULL) {
-        proc_destroy(child);
-        return ENOMEM;
-    }
-    result = stackimage_save(parent_thread, tf, image);
+    result = trapframe_save(&tf_copy, tf);
     if (result) {
-        stackimage_destroy(image);
         proc_destroy(child);
         return result;
     }
@@ -106,11 +100,6 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
         proc_destroy(child);
         return result;
     }
-    //DEBUG
-    while (1) {
-        ;
-    }
-
     // Parent returns child pid.
     *pid = child->pid;
     return 0;

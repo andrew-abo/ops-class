@@ -82,7 +82,6 @@ static struct wchan *thread_count_wchan;
  * (sometimes) catch kernel stack overflows. Use thread_checkstack()
  * to test this.
  */
-static
 void
 thread_checkstack_init(struct thread *thread)
 {
@@ -102,7 +101,6 @@ thread_checkstack_init(struct thread *thread)
  * cannot be freed (which in turn is the case if the stack is the boot
  * stack, and the thread is the boot thread) this doesn't do anything.
  */
-static
 void
 thread_checkstack(struct thread *thread)
 {
@@ -524,6 +522,7 @@ thread_fork(const char *name,
 		thread_destroy(newthread);
 		return ENOMEM;
 	}
+	bzero(newthread->t_stack, STACK_SIZE);
 	thread_checkstack_init(newthread);
 
 	/*
@@ -1260,92 +1259,65 @@ void thread_wait_for_count(unsigned tc)
 // Stack operations.
 //
 
-struct stackimage 
-*stackimage_create()
-{
-	struct stackimage *image;
-	image = (struct stackimage *)kmalloc(sizeof(struct stackimage));
-	if (image == NULL) {
-		return NULL;
-	}
-	image->size = 0;
-	image->bottom = NULL;
-	return image;
-}
-
-void 
-stackimage_destroy(struct stackimage *image)
-{
-    KASSERT(image != NULL);
-	//KASSERT(image->bottom != NULL);
-	if (image->bottom) {
-        kfree(image->bottom);    
-	}
-	kfree(image);
-}
-
 /*
- * Saves snapshot of thread t starting at the trapframe.
- *
- * Contents are saved at the stackframe containing trapframe.
- * i.e. tf - STACK_OFFSET
+ * Saves copy of trapframe.
  *
  * Args:
- *   t: Thread whose stack to save.
- *   tf: Pointer to trapframe on thread stack.
- *   image: Pointer to container for image.
+ *   tf_dst_ptr: Returns pointer to new copy of trapframe.
+ *   tf_src: Pointer to trapframe to copy.
  * 
  * Returns:
  *   0 on success, else errno.
  */
 int 
-stackimage_save(struct thread *t, struct trapframe *tf, 
-                struct stackimage *image)
+trapframe_save(struct trapframe **tf_dst_ptr, const struct trapframe *tf_src)
 {
-	char *src_start;
-	char *src_end;
-
-	KASSERT(t != NULL);
-	KASSERT(tf != NULL);
-	KASSERT(SAME_STACK((vaddr_t)(t->t_stack), (vaddr_t)tf));
-	// Only save from trapframe upwards. Any stackframes below that 
-	// get discarded.
-	// size includes STACK_OFFSET bytes below trapframe.
-	src_start = ((char *)tf) - STACK_OFFSET;
-	src_end = ((char *)(t->t_stack)) + STACK_SIZE;
-	image->size = src_end - src_start;
-	KASSERT(image->size > 0);
-	image->bottom = kmalloc(image->size);
-	if (image->bottom == NULL) {
+	KASSERT(tf_dst_ptr != NULL);
+	KASSERT(tf_src != NULL);
+	*tf_dst_ptr = kmalloc(sizeof(struct trapframe));
+	if (*tf_dst_ptr == NULL) {
 		return ENOMEM;
 	}
-	memcpy(image->bottom, (void *)src_start, image->size);
+	memcpy((void *)*tf_dst_ptr, (void *)tf_src, sizeof(struct trapframe));
 	return 0;
 }
 
 /* 
- * Loads a snapshot of thread stack overwriting existing stack.
+ * Loads a copy of trapframe onto bottom of thread stack.
+ *
+ * Assumes that the bottom of the stack is unused.  If
+ * bottom of the stack is in use, this will corrupt the
+ * stack.
  *
  * Args:
  *   t: Thread to load image into.
- *   image: Stack image to load.
+ *   tf_src: Trapframe pointer to copy in.
+ *   tf_dst_ptr: Returns destination pointer of new copy.
  * 
  * Returns:
  *   0 on success, else errno.
  */
 int
-stackimage_load(struct thread *t, struct stackimage *image)
+trapframe_load(struct thread *t, struct trapframe **tf_dst_ptr, const struct trapframe *tf_src)
 {
-	char *stack_bottom;
-
+    char *tf_dst_top;
 	KASSERT(t != NULL);
-	KASSERT(image != NULL);
-    bzero(t->t_stack, STACK_SIZE);
-	thread_checkstack_init(t);
-	// stack_bottom points to the stackframe containing our trapframe.
-	stack_bottom = (char *)(t->t_stack) + STACK_SIZE - image->size;
-	KASSERT((vaddr_t)stack_bottom > (vaddr_t)(t->t_stack));
-	memcpy(stack_bottom, image->bottom, image->size);
+	KASSERT(tf_src != NULL);
+	KASSERT(tf_dst_ptr != NULL);
+	size_t checkstack_bytes;
+
+	// Place copy just above thread_checkstack_init() sentinel.
+	// If that code is modified, this needs to change to match.
+	checkstack_bytes = 4 * sizeof(uint32_t);
+	*tf_dst_ptr = (struct trapframe *)(t->t_stack + checkstack_bytes);
+	tf_dst_top = t->t_stack + STACK_SIZE;
+	// Sanity check the destination does not appear to be in use.
+	// thread_fork() zeroes out the stack, so we should see zeros.
+	// This is a bit brittle if thread_fork() changes, but worst
+	// case we get a false assert.
+	KASSERT(*((uint32_t *)*tf_dst_ptr) == 0);
+	KASSERT(*((uint32_t *)tf_dst_top) == 0);
+	memcpy((void *)*tf_dst_ptr, (void *)tf_src, sizeof(struct trapframe));
 	return 0;
 }
  

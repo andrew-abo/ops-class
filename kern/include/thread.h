@@ -121,19 +121,9 @@ struct thread {
 	/* add more here as needed */
 };
 
-// A saved snapshot of a thread's kernel side stack
-// starting at the trapframe - STACK_OFFSET which such that
-// MIPS stackframe is preserved.
-struct stackimage {
-       size_t size;  // Image size in bytes.
-       void *bottom;  // Lowest address
-};
-
-struct stackimage *stackimage_create(void);
-void stackimage_destroy(struct stackimage *image);
-int stackimage_save(struct thread *t, struct trapframe *tf, 
-                    struct stackimage *image);
-int stackimage_load(struct thread *t, struct stackimage *image);
+int trapframe_save(struct trapframe **tf_dst_ptr, const struct trapframe *tf_src);
+int trapframe_load(struct thread *t, struct trapframe **tf_dst_ptr, 
+                   const struct trapframe *tf_src);
 
 /*
  * Array of threads.
@@ -150,6 +140,10 @@ void thread_bootstrap(void);
 
 /* Call late in system startup to get secondary CPUs running. */
 void thread_start_cpus(void);
+
+/* Sanity checks for stack integrity */
+void thread_checkstack_init(struct thread *thread);
+void thread_checkstack(struct thread *thread);
 
 /* Call during panic to stop other threads in their tracks */
 void thread_panic(void);
