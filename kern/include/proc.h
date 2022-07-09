@@ -125,7 +125,7 @@ int proclist_insert(struct proc *newproc);
 /* Remove pid from proclist */
 struct proc *proclist_remove(pid_t pid);
 
-int proclist_init(void);
+void proclist_init(void);
 void proclist_teardown(void);
 void proclist_lock_acquire(void);
 void proclist_lock_release(void);

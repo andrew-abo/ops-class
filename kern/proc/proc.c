@@ -482,14 +482,13 @@ struct proc *proclist_remove(pid_t pid)
  * Returns:
  *   0 on success, else 1.
  */
-int proclist_init()
+void proclist_init()
 {
     proclist = NULL;
 	proclist_lock = lock_create("proclist");
-	if (proclist == NULL) {
-		return 1;
+	if (proclist_lock == NULL) {
+		panic("Cannot create proclist_lock.");
 	}
-	return 0;
 }
 
 void proclist_teardown()
