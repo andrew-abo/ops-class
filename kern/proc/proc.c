@@ -209,15 +209,23 @@ proc_destroy(struct proc *proc)
 		}
 		as_destroy(as);
 	}
-
-	lock_destroy(proc->p_cwd_lock);
+	if (proc->p_cwd_lock) {
+        lock_destroy(proc->p_cwd_lock);
+	}
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
-	lock_destroy(proc->files_lock);
-	lock_destroy(proc->waitpid_lock);
-	cv_destroy(proc->waitpid_cv);
-	kfree(proc->p_name);
-	// TODO(aabo): close open file descriptors.
+	if (proc->files_lock) {
+		lock_destroy(proc->files_lock);
+	}
+	if (proc->waitpid_lock) {
+        lock_destroy(proc->waitpid_lock);
+	}
+	if (proc->waitpid_cv) {
+        cv_destroy(proc->waitpid_cv);
+	}
+	if (proc->p_name) {
+		kfree(proc->p_name);
+	}
 	kfree(proc);
 }
 

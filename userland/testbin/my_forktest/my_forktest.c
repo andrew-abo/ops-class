@@ -19,20 +19,22 @@ int main(int argc, char *argv[])
     (void)argc;
 	(void)argv;
 
-	pid = fork();
-	if (pid == 0) {
-		// Due to current lack of synchronization, child and
-		// parent will race to print their outputs and may be
-		// mixed.
-		printf("CHILD\n");
-		// _exit() not implemented so spin to avoid panic.
-		while (1) {
-			;
-		}
-		return 0;
+	for (int i = 0; i < 1; i++) {
+        pid = fork();
+        if (pid == 0) {
+            // Due to current lack of synchronization, child and
+            // parent will race to print their outputs and may be
+            // mixed.
+            printf("CHILD %d\n", i);
+            // _exit() not implemented so spin to avoid panic.
+            while (1) {
+                ;
+            }
+            return 0;
+        }
+        printf("Parent spawned child pid = %u", pid);
 	}
-	printf("Parent spawned child pid = %u", pid);
-	// _exit() not implemented so spin to avoid panic.
+    // _exit() not implemented so spin to avoid panic.
 	while (1) {
 		;
 	}
