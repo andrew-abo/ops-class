@@ -56,7 +56,6 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
 {
     struct proc *child;
     struct proc *parent;
-    //struct thread *parent_thread;
     struct trapframe *tf_copy;
     int result;
 
@@ -67,7 +66,6 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
         return EINVAL;
     }
     parent = curproc;
-    //parent_thread = curthread;
     child = proc_create("fork");
     if (child == NULL) {
         return ENOMEM;
@@ -76,11 +74,24 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     if (result) {
         return result;
     }
-    //child->p_cwd =?
-    //next, prev
+
+    lock_acquire(parent->p_cwd_lock);
+    if (parent->p_cwd != NULL) {
+		VOP_INCREF(parent->p_cwd);
+		child->p_cwd = parent->p_cwd;
+	}
+	lock_release(parent->p_cwd_lock);
+
+    lock_acquire(parent->files_lock);
     copy_file_descriptor_table(child, parent);
+    lock_release(parent->files_lock);
+
+    spinlock_acquire(&parent->p_lock);
     child->ppid = parent->pid;
     tf_copy = copy_trapframe(tf);
+    //next, prev
+	spinlock_release(&parent->p_lock);
+
     if (tf_copy == NULL) {
         proc_destroy(child);
         return ENOMEM;
