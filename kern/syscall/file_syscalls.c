@@ -417,9 +417,7 @@ sys___getcwd(userptr_t buf, size_t buflen, size_t *bytes_in)
         return ENOMEM;
     }
     uio_kinit(&iov, &my_uio, kbuf, buflen, 0, UIO_READ);
-    lock_acquire(curproc->p_cwd_lock);
     result = vfs_getcwd(&my_uio);
-    lock_release(curproc->p_cwd_lock);
     if (result) {
         kfree(kbuf);
         return result;
@@ -453,9 +451,7 @@ sys_chdir(const_userptr_t pathname)
     if (result) {
         return result;
     }
-    lock_acquire(curproc->p_cwd_lock);
     result = vfs_chdir(kpathname);
-    lock_release(curproc->p_cwd_lock);
     if (result) {
         return result;
     }

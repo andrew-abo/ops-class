@@ -67,23 +67,19 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
         return result;
     }
 
-    lock_acquire(parent->p_cwd_lock);
-    if (parent->p_cwd != NULL) {
-		VOP_INCREF(parent->p_cwd);
-		child->p_cwd = parent->p_cwd;
-	}
-	lock_release(parent->p_cwd_lock);
-
     lock_acquire(parent->files_lock);
     copy_file_descriptor_table(child, parent);
     lock_release(parent->files_lock);
 
     spinlock_acquire(&parent->p_lock);
+    if (parent->p_cwd != NULL) {
+		VOP_INCREF(parent->p_cwd);
+		child->p_cwd = parent->p_cwd;
+	}
     child->ppid = parent->pid;
-    tf_copy = copy_trapframe(tf);
-    //next, prev
 	spinlock_release(&parent->p_lock);
 
+    tf_copy = copy_trapframe(tf);
     if (tf_copy == NULL) {
         proc_destroy(child);
         return ENOMEM;
