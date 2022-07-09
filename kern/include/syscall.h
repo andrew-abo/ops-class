@@ -62,6 +62,7 @@ int sys_chdir(const_userptr_t pathname);
 int sys_close(int fd, int lock_fd_table);
 int sys_dup2(int oldfd, int newdfd);
 int sys_fork(pid_t *pid, struct trapframe *tf);
+int sys_getpid(pid_t *pid);
 int sys_lseek(int fd, off_t pos, int whence, off_t *abs_offset);
 int sys_open(const_userptr_t filename, int flags, int *fd);
 int sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in);

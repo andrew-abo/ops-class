@@ -43,6 +43,7 @@
  */
 
 #include <types.h>
+#include <kern/errno.h>
 #include <spl.h>
 #include <proc.h>
 #include <current.h>
@@ -270,6 +271,9 @@ copy_file_descriptor_table(struct proc *dst, const struct proc *src)
  *
  * It will have no address space and will inherit the current
  * process's (that is, the kernel menu's) current directory.
+ * 
+ * This process is effectively the "init" process from which
+ * all other processes are forked.
  */
 struct proc *
 proc_create_runprogram(const char *name)
@@ -282,7 +286,6 @@ proc_create_runprogram(const char *name)
 	}
 
 	/* VM fields */
-
 	newproc->p_addrspace = NULL;
 
 	/* VFS fields */
@@ -299,6 +302,9 @@ proc_create_runprogram(const char *name)
 	}
 	copy_file_descriptor_table(newproc, curproc);
 	spinlock_release(&curproc->p_lock);
+
+	/* Process fields */
+	newproc->pid = 1;
 
 	return newproc;
 }
@@ -408,7 +414,7 @@ proc_setas(struct addrspace *newas)
  *   newproc: Pointer to new process to insert.
  * 
  * Returns:
- *   0 on success, else 1.
+ *   0 on success, else errno.
  */   
 int
 proclist_insert(struct proc *newproc)
@@ -420,7 +426,7 @@ proclist_insert(struct proc *newproc)
 	prev = NULL;
 	for (p = proclist; p != NULL; p = p->next) {
 		if (p->pid == PID_MAX) {
-			return 1;
+			return EMPROC;
 		}
 		if (prev != NULL) {
             KASSERT(p->pid > prev->pid);
@@ -435,7 +441,7 @@ proclist_insert(struct proc *newproc)
 	}
 	newproc->next = NULL;	
 	if (prev == NULL) {
-		newproc->pid = PID_MIN;
+		newproc->pid = 1;
 		proclist = newproc;
 		return 0;
 	}

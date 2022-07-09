@@ -142,6 +142,11 @@ syscall(struct trapframe *tf)
 		retval = (int32_t)pid;
 		break;
 
+		case SYS_getpid:
+		err = sys_getpid(&pid);
+		retval = (int32_t)pid;
+		break;
+
 		case SYS_lseek:
 		// Special handling for passing 64b value with 32b MIPS registers.
 		// a0 = fd

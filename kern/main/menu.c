@@ -112,6 +112,7 @@ cmd_progthread(void *ptr, unsigned long nargs)
  * Also note that because the subprogram's thread uses the "args"
  * array and strings, until you do this a race condition exists
  * between that code and the menu input code.
+ * 
  */
 static
 int
@@ -126,6 +127,13 @@ common_prog(int nargs, char **args)
 	if (proc == NULL) {
 		return ENOMEM;
 	}
+	result = proclist_insert(proc);
+	if (result) {
+		kprintf("common_prog: Failed proclist_insert.\n");
+		proc_destroy(proc);
+        return result;
+	}
+	KASSERT(proc->pid == 1);
 
 	tc = thread_count;
 

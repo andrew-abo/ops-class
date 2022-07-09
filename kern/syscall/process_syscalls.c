@@ -113,3 +113,19 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     *pid = child->pid;
     return 0;
 }
+
+/*
+ * Gets current process ID.
+ *
+ * Args:
+ *   pid: Pointer to return process ID.
+ * 
+ * Returns
+ *   0 always.
+ */
+int sys_getpid(pid_t *pid)
+{
+    KASSERT(pid != NULL);
+    *pid = curproc->pid;
+    return 0;
+}
