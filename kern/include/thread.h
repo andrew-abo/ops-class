@@ -39,6 +39,7 @@
 #include <array.h>
 #include <spinlock.h>
 #include <threadlist.h>
+#include <mips/trapframe.h>
 
 struct cpu;
 
@@ -121,11 +122,11 @@ struct thread {
 };
 
 // A saved snapshot of a thread's kernel side stack
-// starting at the trapfrrame.
+// starting at the trapframe - STACK_OFFSET which such that
+// MIPS stackframe is preserved.
 struct stackimage {
        size_t size;  // Image size in bytes.
        void *bottom;  // Lowest address
-       struct trapframe *tf;  // bottom + 16.
 };
 
 struct stackimage *stackimage_create(void);

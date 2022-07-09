@@ -30,7 +30,7 @@
 #ifndef _SYSCALL_H_
 #define _SYSCALL_H_
 
-
+#include <thread.h>
 #include <cdefs.h> /* for __DEAD */
 struct trapframe; /* from <machine/trapframe.h> */
 
@@ -44,8 +44,8 @@ void syscall(struct trapframe *tf);
  * Support functions.
  */
 
-/* Helper for fork(). You write this. */
-void enter_forked_process(struct trapframe *tf);
+/* Teleport to new child process */
+void enter_forked_process(void *, unsigned long);
 
 /* Enter user mode. Does not return. */
 __DEAD void enter_new_process(int argc, userptr_t argv, userptr_t env,

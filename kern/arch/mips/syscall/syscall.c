@@ -138,6 +138,7 @@ syscall(struct trapframe *tf)
 
 		case SYS_fork:
 		err = sys_fork(&pid, tf);
+		// Parent returns here.
 		retval = (int32_t)pid;
 		break;
 
@@ -224,20 +225,45 @@ syscall(struct trapframe *tf)
 }
 
 /*
- * Enter user mode for a newly forked process.
+ * Enter user mode for a newly forked child process.
  *
- * This function is provided as a reminder. You need to write
- * both it and the code that calls it.
- *
- * Thus, you can trash it and do things another way if you prefer.
+ * Installs parent stack image over child stack.
+ * Modifies return value to 0 to distinguish child in fork() return.
+ * Jumps directly back to usermode via exception return using
+ * parent trapframe.
+ * 
+ * Args:
+ *   image: Parent's unmodified stack image.
  */
 void
-enter_forked_process(struct trapframe *tf)
+enter_forked_process(void *arg1, unsigned long unused_arg2)
 {
-	(void)tf;
-	// TODO(aabo): copy parent stack image to child.
-	// modify trapframe to return pid=0
-    // thread_fork(entrypoint=enter_forked_process)
-	mips_usermode(tf);
+	struct stackimage *image;
+	struct trapframe *tf;
+
+	image = (struct stackiamge *)arg1;
+	(void)unused_arg2;
+	// TODO(aabo): Why does this bomb?
+	// if I muck with my own stack, I'm mucking with local variables.
+	// Similarly if I assign local variables after loading the stack,
+	// then I could be corrupting my stack image.
+	// Perhaps I need to load the image below the current stack frame to
+	// avoid corruption.  It may get safely overwritten later.
+	// I could put it just above the STACK_MAGIC values.
+	// t->t_context is a recent value of my sp, but sp may have changed
+	// depending on what got called in the meantime.
+	// A more rigorous approach would be to put more magic values in the
+	// stack area I want to use for the trapframe.  If these have changed,
+	// then I can't used it for scratch stack memory and should panic.
+    result = stackimage_load(curthread, image);
+	if (result) {
+		panic("enter_forked_process: Unable to load stackimage");
+	}
+	stackimage_destroy(image);
+	tf = (struct trapframe *)(curthread->t_stack + STACK_SIZE - image->size);
+	tf->tf_v0 = 0;  // Child returns 0 from fork().
+	tf->tf_a3 = 0;  // No error.
+	tf->tf_epc += 4;  // Step past originating syscall.
+	mips_usermode(tf);	
 }
 

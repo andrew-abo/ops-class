@@ -394,6 +394,10 @@ mips_usermode(struct trapframe *tf)
 	 * current thread's own stack. It cannot correctly be on
 	 * either another thread's stack or in the kernel heap.
 	 * (Exercise: why?)
+	 * If it's on another thread's stack, it can change at any
+	 * time depending on what the other thread is doing (race).
+	 * If it's on the heap, we need to free it after we are done,
+	 * but there's no provision for that in asm_usermode.
 	 */
 	KASSERT(SAME_STACK(cpustacks[curcpu->c_number]-1, (vaddr_t)tf));
 

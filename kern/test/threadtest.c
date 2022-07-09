@@ -181,7 +181,6 @@ threadtest5(int nargs, char **args)
 
 	kprintf("Starting thread test 5...\n");
 	image = stackimage_create();
-	kprintf("sizeof(struct stackimage) = %u\n", sizeof(struct stackimage));
 	KASSERT(image != NULL);
 	dummy_stack = kmalloc(STACK_SIZE);
 	KASSERT(dummy_stack != NULL);

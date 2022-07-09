@@ -1270,7 +1270,6 @@ struct stackimage
 	}
 	image->size = 0;
 	image->bottom = NULL;
-	image->tf = NULL;
 	return image;
 }
 
@@ -1286,7 +1285,10 @@ stackimage_destroy(struct stackimage *image)
 }
 
 /*
- * Saves snapshot of thread t starting at trapframe.
+ * Saves snapshot of thread t starting at the trapframe.
+ *
+ * Contents are saved at the stackframe containing trapframe.
+ * i.e. tf - STACK_OFFSET
  *
  * Args:
  *   t: Thread whose stack to save.
@@ -1308,6 +1310,7 @@ stackimage_save(struct thread *t, struct trapframe *tf,
 	KASSERT(SAME_STACK((vaddr_t)(t->t_stack), (vaddr_t)tf));
 	// Only save from trapframe upwards. Any stackframes below that 
 	// get discarded.
+	// size includes STACK_OFFSET bytes below trapframe.
 	src_start = ((char *)tf) - STACK_OFFSET;
 	src_end = ((char *)(t->t_stack)) + STACK_SIZE;
 	image->size = src_end - src_start;
@@ -1316,9 +1319,7 @@ stackimage_save(struct thread *t, struct trapframe *tf,
 	if (image->bottom == NULL) {
 		return ENOMEM;
 	}
-	kprintf("memcpy(%p, %p, 0x%x(%u))\n", (void*)(image->bottom), (void*)src_start, image->size, image->size);
 	memcpy(image->bottom, (void *)src_start, image->size);
-	image->tf = (struct trapframe *)(((char *)(image->bottom)) + STACK_OFFSET);
 	return 0;
 }
 
@@ -1335,11 +1336,16 @@ stackimage_save(struct thread *t, struct trapframe *tf,
 int
 stackimage_load(struct thread *t, struct stackimage *image)
 {
+	char *stack_bottom;
+
 	KASSERT(t != NULL);
 	KASSERT(image != NULL);
-	KASSERT(SAME_STACK((vaddr_t)(image->bottom), (vaddr_t)(image->tf)));
     bzero(t->t_stack, STACK_SIZE);
-	memcpy(t->t_stack, image->bottom, image->size);
+	thread_checkstack_init(t);
+	// stack_bottom points to the stackframe containing our trapframe.
+	stack_bottom = (char *)(t->t_stack) + STACK_SIZE - image->size;
+	KASSERT((vaddr_t)stack_bottom > (vaddr_t)(t->t_stack));
+	memcpy(stack_bottom, image->bottom, image->size);
 	return 0;
 }
  
