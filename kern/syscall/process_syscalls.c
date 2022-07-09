@@ -15,29 +15,6 @@
 #include <kern/errno.h>
 
 /*
- * Returns a heap allocated copy of trapframe.
- *
- * Args:
- *   tf: Pointer to trapframe to copy.
- * 
- * Returns;
- *   Pointer to new copy if successful, else NULL
- */
-static struct trapframe
-*copy_trapframe(struct trapframe *tf)
-{
-    struct trapframe *tf_copy;
-
-    KASSERT(tf != NULL);
-    tf_copy = kmalloc(sizeof(struct trapframe));
-    if (tf_copy == NULL) {
-        return NULL;
-    }
-    memcpy((void *)tf_copy, (void *)tf, sizeof(struct trapframe));
-    return tf_copy;
-}
-
-/*
  * Spawn a new process.
  *
  * Args:
@@ -79,11 +56,6 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     child->ppid = parent->pid;
 	spinlock_release(&parent->p_lock);
 
-    tf_copy = copy_trapframe(tf);
-    if (tf_copy == NULL) {
-        proc_destroy(child);
-        return ENOMEM;
-    }
     result = trapframe_save(&tf_copy, tf);
     if (result) {
         proc_destroy(child);
@@ -98,6 +70,9 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     result = thread_fork("fork", child, enter_forked_process, (void *)tf_copy, 0);
     if (result) {
         kfree(tf_copy);
+        proclist_lock_acquire();
+        proclist_remove(child->pid);
+        proclist_lock_release();
         proc_destroy(child);
         return result;
     }

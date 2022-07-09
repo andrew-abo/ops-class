@@ -1256,11 +1256,11 @@ void thread_wait_for_count(unsigned tc)
 
 ///////////////////////////////////////////////////////////
 //
-// Stack operations.
+// Trapframe operations.
 //
 
 /*
- * Saves copy of trapframe.
+ * Saves heap allocated copy of trapframe.
  *
  * Args:
  *   tf_dst_ptr: Returns pointer to new copy of trapframe.
