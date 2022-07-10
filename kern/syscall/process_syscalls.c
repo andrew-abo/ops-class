@@ -200,3 +200,17 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     }
     return 0;
 }
+
+/*
+ * Debugging aid.
+ *
+ * This is not standard.  We hijack the getlogin syscall 
+ * so we can run things in the kernel.  It is a custom debugging aid.
+ */
+void
+sys___getlogin()
+{
+    proclist_lock_acquire();
+    proclist_print();
+    proclist_lock_release();
+}

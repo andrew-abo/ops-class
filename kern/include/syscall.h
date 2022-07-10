@@ -71,4 +71,7 @@ int sys_reboot(int code);
 int sys_waitpid(pid_t pid, userptr_t status, int options);
 int sys_write(int fd, const userptr_t buf, size_t buflen, size_t *bytes_out);
 
+// Custom
+void sys___getlogin(void);
+
 #endif /* _SYSCALL_H_ */

@@ -141,6 +141,12 @@ syscall(struct trapframe *tf)
 		retval = (int32_t)pid;
 		break;
 
+		// Hijack getlogin() for debugging utility.
+		case SYS___getlogin:
+		sys___getlogin();
+		err = 0;
+		break;
+
 		case SYS_getpid:
 		err = sys_getpid(&pid);
 		retval = (int32_t)pid;

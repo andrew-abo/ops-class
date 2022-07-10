@@ -1308,7 +1308,7 @@ trapframe_load(struct thread *t, struct trapframe **tf_dst_ptr, const struct tra
 	// If that code is modified, this needs to change to match.
 	checkstack_bytes = 4 * sizeof(uint32_t);
 	*tf_dst_ptr = (struct trapframe *)(t->t_stack + checkstack_bytes);
-	tf_dst_top = t->t_stack + STACK_SIZE;
+	tf_dst_top = (char *)*tf_dst_ptr + sizeof(struct trapframe);
 	// Sanity check the destination does not appear to be in use.
 	// thread_fork() zeroes out the stack, so we should see zeros.
 	// This is a bit brittle if thread_fork() changes, but worst

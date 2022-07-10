@@ -229,6 +229,9 @@ test(int nowait)
 	 * These must be called in reverse order to avoid waiting
 	 * improperly.
 	 */
+
+	 // TODO(aabo): somehow we get stuck waiting here...
+	 // __getlogin() can be used to print the proclist.
 	dowait(nowait, pid3);
 	nprintf(".");
 	dowait(nowait, pid2);
@@ -237,6 +240,9 @@ test(int nowait)
 	nprintf(".");
 	dowait(nowait, pid0);
 	nprintf(".");
+
+	printf("Done waiting\n");
+	exit(0);
 
 	// Check if file contents are correct
 	// lseek may not be implemented..so close and reopen
