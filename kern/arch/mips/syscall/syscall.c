@@ -111,7 +111,8 @@ syscall(struct trapframe *tf)
 
 	switch (callno) {
 		case SYS__exit:
-		panic("_exit() not implemented.");
+		sys__exit((int)tf->tf_a0);
+		panic("syscall: Unexpected return from _exit().");
 		break;
 
 		case SYS___getcwd:
@@ -251,7 +252,7 @@ enter_forked_process(void *arg1, unsigned long unused_arg2)
 	(void)unused_arg2;
     result = trapframe_load(curthread, &tf, tf_copy);
 	if (result) {
-		panic("enter_forked_process: Unable to load stackimage");
+		panic("enter_forked_process: Unable to load trapframe.");
 	}
 	kfree(tf_copy);
 	tf->tf_v0 = 0;  // Child returns 0 from fork().

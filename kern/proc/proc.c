@@ -84,7 +84,7 @@ proc_create(const char *name)
 	proc->ppid = 0;
 	proc->p_numthreads = 0;
 	proc->p_state = S_READY;
-	proc->exit_code = 0;
+	proc->exit_status = 0;
 	proc->waitpid_cv = cv_create("waitpid");
 	if (proc->waitpid_cv == NULL) {
 		kfree(proc->p_name);
@@ -136,13 +136,15 @@ proc_create(const char *name)
 }
 
 /*
- * Destroy a proc structure.
+ * De-allocate everything except fields needed for waitpid.
  *
- * Note: nothing currently calls this. Your wait/exit code will
- * probably want to do so.
+ * Used in making a process a zombie.
+ *
+ * Args:
+ *   proc: Pointer to process to make a zombie.
  */
 void
-proc_destroy(struct proc *proc)
+proc_zombify(struct proc *proc)
 {
 	/*
 	 * You probably want to destroy and null out much of the
@@ -160,6 +162,8 @@ proc_destroy(struct proc *proc)
 	 * reference to this structure. (Otherwise it would be
 	 * incorrect to destroy it.)
 	 */
+
+	proc->p_state = S_ZOMBIE;
 
 	/* VFS fields */
 	if (proc->p_cwd) {
@@ -222,14 +226,30 @@ proc_destroy(struct proc *proc)
 	if (proc->files_lock) {
 		lock_destroy(proc->files_lock);
 	}
+	if (proc->p_name) {
+		kfree(proc->p_name);
+	}
+}
+
+/*
+ * Destroy a proc structure.
+ *
+ * De-allocates everything.  Should not be used to make
+ * a zombie because you will lose the fields needed for
+ * waitpid.
+ * 
+ * Args:
+ *   proc: Pointer to process to destroy.
+ */
+void
+proc_destroy(struct proc *proc)
+{
+    proc_zombify(proc);
 	if (proc->waitpid_lock) {
         lock_destroy(proc->waitpid_lock);
 	}
 	if (proc->waitpid_cv) {
         cv_destroy(proc->waitpid_cv);
-	}
-	if (proc->p_name) {
-		kfree(proc->p_name);
 	}
 	kfree(proc);
 }
@@ -511,4 +531,21 @@ void proclist_lock_acquire()
 void proclist_lock_release()
 {
 	lock_release(proclist_lock);
+}
+
+/*
+ * Re-assigns children of pid to the init process (pid=1).
+ *
+ * Args:
+ *   pid: Pid of exiting parent.
+ */
+void proclist_reparent(pid_t pid)
+{
+	struct proc *p;
+
+	for (p = proclist; p != NULL; p = p->next) {
+		if (p->ppid == pid) {
+			p->ppid = 1;
+		}
+	}
 }

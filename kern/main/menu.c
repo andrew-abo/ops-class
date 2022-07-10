@@ -133,7 +133,6 @@ common_prog(int nargs, char **args)
 		proc_destroy(proc);
         return result;
 	}
-	KASSERT(proc->pid == 1);
 
 	tc = thread_count;
 

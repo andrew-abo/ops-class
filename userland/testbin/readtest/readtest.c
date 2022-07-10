@@ -23,7 +23,7 @@ main(int argc, char **argv)
 		err(1, "read failed on STDIN.");
 	}
 	buf[result] = '\0';
-	tprintf("read: %s\n", buf);
+	tprintf("Enter some text: %s\n", buf);
 
 	errno = 0;
 	result = read(1, buf, sizeof(buf));

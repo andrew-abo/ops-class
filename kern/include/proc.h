@@ -39,6 +39,7 @@
 #include <file_handle.h>
 #include <limits.h>
 #include <spinlock.h>
+#include <syscall.h>
 #include <thread.h>
 
 struct addrspace;
@@ -70,7 +71,7 @@ struct proc {
 	pid_t ppid;  // My parent's process ID.
 	unsigned p_numthreads;		/* Number of threads in this process */
 	procstate_t p_state;
-	int exit_code;  // Only valid if p_state == S_ZOMBIE.
+	int exit_status;  // Only valid if p_state == S_ZOMBIE.
 	struct cv *waitpid_cv;  // Wait channel for blocking until I exit.
 	struct lock *waitpid_lock;  // Lock for the wait channel.
 	struct spinlock p_lock;		/* Lock for this structure */
@@ -104,6 +105,9 @@ struct proc *proc_create(const char *name);
 /* Create a fresh process for use by runprogram(). */
 struct proc *proc_create_runprogram(const char *name);
 
+/* De-allocate everything except fields needed for waitpid */
+void proc_zombify(struct proc *proc);
+
 /* Destroy a process. */
 void proc_destroy(struct proc *proc);
 
@@ -124,6 +128,9 @@ int proclist_insert(struct proc *newproc);
 
 /* Remove pid from proclist */
 struct proc *proclist_remove(pid_t pid);
+
+/* Re-assigns children of pid to init */
+void proclist_reparent(pid_t pid);
 
 void proclist_init(void);
 void proclist_teardown(void);

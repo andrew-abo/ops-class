@@ -13,6 +13,7 @@
 #include <current.h>
 #include <proc.h>
 #include <kern/errno.h>
+#include <kern/wait.h>
 
 /*
  * Spawn a new process.
@@ -95,4 +96,35 @@ int sys_getpid(pid_t *pid)
     KASSERT(pid != NULL);
     *pid = curproc->pid;
     return 0;
+}
+
+/*
+ * Exits the current process.
+ *
+ * Args:
+ *   exitcode: User supplied exit code.
+ */
+void
+sys__exit(int exitcode)
+{
+    struct proc *proc;
+
+    curproc->exit_status = _MKWAIT_EXIT(exitcode);
+    proclist_reparent(curproc->pid);
+	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
+        if (curproc->files[fd] != NULL) {
+            // sys_close() refers to curproc global, which
+            // requires thread to still be attached to this
+            // process, so this must be done before proc_remthread().
+            sys_close(fd, 0);
+        }
+    }
+    // curproc becomes NULL once we call proc_remthread, so save it.
+    proc = curproc;
+	proc_remthread(curthread);
+    proc_zombify(proc);
+    lock_acquire(proc->waitpid_lock);
+    cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
+    lock_release(proc->waitpid_lock);
+    thread_exit();
 }
