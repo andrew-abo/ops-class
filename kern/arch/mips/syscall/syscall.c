@@ -37,8 +37,6 @@
 #include <current.h>
 #include <syscall.h>
 
-#define BYTES_PER_INT 4  // MIPS dependent.
-
 /*
  * System call dispatcher.
  *
@@ -89,7 +87,7 @@ syscall(struct trapframe *tf)
 	userptr_t whence_ptr;
 	int whence;
 	off_t abs_offset;
-	char buf[BYTES_PER_INT];
+	char buf[sizeof(int)];
 	pid_t pid;
 
 	KASSERT(curthread != NULL);
@@ -187,6 +185,12 @@ syscall(struct trapframe *tf)
 
 	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
+		break;
+
+		case SYS_waitpid:
+		pid = (pid_t)tf->tf_a0;
+		err = sys_waitpid(pid, (userptr_t)tf->tf_a1, (int)tf->tf_a2);
+		retval = pid;
 		break;
 
 	    case SYS_write:

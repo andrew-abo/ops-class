@@ -220,14 +220,13 @@ proc_zombify(struct proc *proc)
 	}
 	if (proc->p_cwd_lock) {
         lock_destroy(proc->p_cwd_lock);
+		proc->p_cwd_lock = NULL;
 	}
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 	if (proc->files_lock) {
 		lock_destroy(proc->files_lock);
-	}
-	if (proc->p_name) {
-		kfree(proc->p_name);
+		proc->files_lock = NULL;
 	}
 }
 
@@ -250,6 +249,9 @@ proc_destroy(struct proc *proc)
 	}
 	if (proc->waitpid_cv) {
         cv_destroy(proc->waitpid_cv);
+	}
+	if (proc->p_name) {
+		kfree(proc->p_name);
 	}
 	kfree(proc);
 }
@@ -486,7 +488,7 @@ struct proc *proclist_remove(pid_t pid)
 	struct proc *p;
 	struct proc *prev;
 
-	KASSERT((pid >= PID_MIN) && (pid <= PID_MAX));
+	KASSERT((pid >= 1) && (pid <= PID_MAX));
 	prev = NULL;
 	for (p = proclist; p != NULL; p = p->next) {
 		if (p->pid == pid) {
@@ -547,5 +549,68 @@ void proclist_reparent(pid_t pid)
 		if (p->ppid == pid) {
 			p->ppid = 1;
 		}
+	}
+}
+
+/*
+ * Returns proc from proclist matching pid.
+ *
+ * Args:
+ *   pid: Process ID to find.
+ * 
+ * Returns:
+ *   Pointer to proc matching pid, else NULL.
+ */
+struct proc 
+*proclist_lookup(pid_t pid) 
+{
+    struct proc *p;
+
+	for (p = proclist; p != NULL; p = p->next) {
+		if (p->pid == pid) {
+			return p;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * Prints proclist as debugging aid.
+ */
+void
+proclist_print()
+{
+	struct proc *p;
+	char s_run[] = "RUN";
+	char s_ready[] = "READY";
+	char s_sleep[] = "SLEEP";
+	char s_zombie[] = "ZOMBIE";
+	char s_unknown[] = "UNKNOWN";
+	char *state;
+
+	kprintf("%6s %6s %30s %10s\n", "PID", "PPID", "NAME", "STATE");
+	for (p = proclist; p != NULL; p = p->next) {
+		switch (p->p_state) {
+			case S_RUN:
+			state = s_run;
+			break;
+			
+			case S_READY:
+			state = s_ready;
+			break;
+			
+			case S_SLEEP:
+			state = s_sleep;
+			break;
+			
+			case S_ZOMBIE:
+			state = s_zombie;
+			break;
+			
+			default:
+			state = s_unknown;
+			break;
+        }
+		kprintf("%6d %6d %30s %10s\n", p->pid, p->ppid, p->p_name, state);
 	}
 }

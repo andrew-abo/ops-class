@@ -14,6 +14,7 @@
 #include <proc.h>
 #include <kern/errno.h>
 #include <kern/wait.h>
+#include <synch.h>
 
 /*
  * Spawn a new process.
@@ -94,7 +95,9 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
 int sys_getpid(pid_t *pid)
 {
     KASSERT(pid != NULL);
+    spinlock_acquire(&curproc->p_lock);
     *pid = curproc->pid;
+    spinlock_release(&curproc->p_lock);
     return 0;
 }
 
@@ -110,7 +113,11 @@ sys__exit(int exitcode)
     struct proc *proc;
 
     curproc->exit_status = _MKWAIT_EXIT(exitcode);
+
+    proclist_lock_acquire();
     proclist_reparent(curproc->pid);
+    proclist_lock_release();
+
 	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
         if (curproc->files[fd] != NULL) {
             // sys_close() refers to curproc global, which
@@ -127,4 +134,69 @@ sys__exit(int exitcode)
     cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
     lock_release(proc->waitpid_lock);
     thread_exit();
+}
+
+/*
+ * Waits for specified process ID to exit.
+ * 
+ * Args:
+ *   pid: Process ID to wait for.
+ *   status: Optional pointer to return process exit status.
+ *     NULL ignores exit status.
+ *   options: Option flags, see waitpid(2). Limited support.
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
+int sys_waitpid(pid_t pid, userptr_t status, int options)
+{
+    struct proc *child;
+    int child_status;
+    pid_t child_ppid;
+    pid_t curproc_pid;
+    int result;
+
+    if (options != 0) {
+        return EINVAL;
+    }
+    proclist_lock_acquire();
+    child = proclist_lookup(pid);
+    proclist_lock_release();
+
+    if (child == NULL) {
+        return ESRCH;
+    }
+
+    spinlock_acquire(&child->p_lock);
+    child_status = child->exit_status;
+    child_ppid = child->ppid;
+    spinlock_release(&child->p_lock);
+
+    spinlock_acquire(&curproc->p_lock);
+    curproc_pid = curproc->pid;
+    spinlock_release(&curproc->p_lock);
+    
+    if (child_ppid != curproc_pid) {
+        return ECHILD;
+    }
+
+    lock_acquire(child->waitpid_lock);
+    cv_wait(child->waitpid_cv, child->waitpid_lock);
+    lock_release(child->waitpid_lock);
+
+    proclist_lock_acquire();
+    // TODO(aabo): Looking through the linked list above and here is
+    // inefficient.
+    child = proclist_remove(pid);
+    proclist_lock_release();
+
+
+    proc_destroy(child);
+    if (status != NULL) {
+        result = copyout(&child_status, status, sizeof(int));
+        if (result) {
+            return result;
+        }
+    }
+    return 0;
 }

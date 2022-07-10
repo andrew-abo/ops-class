@@ -127,7 +127,11 @@ common_prog(int nargs, char **args)
 	if (proc == NULL) {
 		return ENOMEM;
 	}
+	
+	proclist_lock_acquire();
 	result = proclist_insert(proc);
+	proclist_lock_release();
+
 	if (result) {
 		kprintf("common_prog: Failed proclist_insert.\n");
 		proc_destroy(proc);
@@ -145,6 +149,8 @@ common_prog(int nargs, char **args)
 		proc_destroy(proc);
 		return result;
 	}
+	sys_waitpid(proc->pid, NULL, 0);
+	kprintf("common_prog: after sys_waitpid\n");
 
 	/*
 	 * The new process will be destroyed when the program exits...

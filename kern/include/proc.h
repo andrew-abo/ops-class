@@ -132,9 +132,13 @@ struct proc *proclist_remove(pid_t pid);
 /* Re-assigns children of pid to init */
 void proclist_reparent(pid_t pid);
 
+/* Returns proc matching pid */
+struct proc *proclist_lookup(pid_t pid);
+
 void proclist_init(void);
 void proclist_teardown(void);
 void proclist_lock_acquire(void);
 void proclist_lock_release(void);
+void proclist_print(void);
 
 #endif /* _PROC_H_ */

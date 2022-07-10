@@ -68,6 +68,7 @@ int sys_lseek(int fd, off_t pos, int whence, off_t *abs_offset);
 int sys_open(const_userptr_t filename, int flags, int *fd);
 int sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in);
 int sys_reboot(int code);
+int sys_waitpid(pid_t pid, userptr_t status, int options);
 int sys_write(int fd, const userptr_t buf, size_t buflen, size_t *bytes_out);
 
 #endif /* _SYSCALL_H_ */
