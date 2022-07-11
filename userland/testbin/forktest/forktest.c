@@ -54,6 +54,30 @@ static char filename[32];
  */
 static volatile int mypid;
 
+// Debugging aid.
+void spin(void);
+void spin() 
+{
+	while (1)
+	;
+}
+
+// Debugging aid.
+// Since stdout is mixed, we can use files as separate
+// outputs per process.  You need to remove all the files
+// before re-running, otherwise they keep appending.
+static void pidprint(pid_t pid, char *msg);
+static void pidprint(pid_t pid, char *msg)
+{
+	int fd;
+	char filename[64];
+	snprintf(filename, sizeof(filename), "pid%d.dat", pid);
+	fd = open(filename, O_WRONLY | O_APPEND | O_CREAT);
+	write(fd, msg, strlen(msg));
+	close(fd);
+}
+
+
 /*
  * Helper function to do pow()
  */
@@ -121,6 +145,10 @@ void
 dowait(int nowait, int pid)
 {
 	int x;
+	int mypid;
+	char msg[128];
+
+	mypid = getpid();
 
 	if (pid<0) {
 		/* fork in question failed; just return */
@@ -128,12 +156,16 @@ dowait(int nowait, int pid)
 	}
 	if (pid==0) {
 		/* in the fork in question we were the child; exit */
+		snprintf(msg, sizeof(msg), "exit\n");
+		pidprint(mypid, msg);
 		exit(0);
 	}
 
 	if (!nowait) {
+		snprintf(msg, sizeof(msg), "waitpid(%d)\n", pid);
+		pidprint(mypid, msg);
 		if (waitpid(pid, &x, 0)<0) {
-			errx(1, "waitpid");
+			errx(1, "waitpid error");
 		}
 		else if (WIFSIGNALED(x)) {
 			errx(1, "pid %d: signal %d", pid, WTERMSIG(x));
@@ -141,8 +173,12 @@ dowait(int nowait, int pid)
 		else if (WEXITSTATUS(x) != 0) {
 			errx(1, "pid %d: exit %d", pid, WEXITSTATUS(x));
 		}
+		snprintf(msg, sizeof(msg), "waitpid(%d) done\n", pid);
+		pidprint(mypid, msg);
 	}
 }
+
+
 
 /*
  * Actually run the test.
@@ -229,9 +265,6 @@ test(int nowait)
 	 * These must be called in reverse order to avoid waiting
 	 * improperly.
 	 */
-
-	 // TODO(aabo): somehow we get stuck waiting here...
-	 // __getlogin() can be used to print the proclist.
 	dowait(nowait, pid3);
 	nprintf(".");
 	dowait(nowait, pid2);
@@ -240,9 +273,6 @@ test(int nowait)
 	nprintf(".");
 	dowait(nowait, pid0);
 	nprintf(".");
-
-	printf("Done waiting\n");
-	exit(0);
 
 	// Check if file contents are correct
 	// lseek may not be implemented..so close and reopen

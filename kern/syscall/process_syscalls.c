@@ -112,22 +112,28 @@ sys__exit(int exitcode)
 {
     struct proc *proc;
 
-    curproc->exit_status = _MKWAIT_EXIT(exitcode);
+    // curproc becomes NULL once we call proc_remthread, so save it.
+    proc = curproc;
 
-    proclist_lock_acquire();
-    proclist_reparent(curproc->pid);
+    spinlock_acquire(&proc->p_lock);
+    proc->exit_status = _MKWAIT_EXIT(exitcode);
+    spinlock_release(&proc->p_lock);
+
+    proclist_lock_acquire();    
+    proclist_reparent(proc->pid);
     proclist_lock_release();
 
+    lock_acquire(proc->files_lock);
 	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
-        if (curproc->files[fd] != NULL) {
+        if (proc->files[fd] != NULL) {
             // sys_close() refers to curproc global, which
             // requires thread to still be attached to this
             // process, so this must be done before proc_remthread().
             sys_close(fd, 0);
         }
     }
-    // curproc becomes NULL once we call proc_remthread, so save it.
-    proc = curproc;
+    lock_release(proc->files_lock);
+
 	proc_remthread(curthread);
     proc_zombify(proc);
     lock_acquire(proc->waitpid_lock);
@@ -152,8 +158,6 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
 {
     struct proc *child;
     int child_status;
-    pid_t child_ppid;
-    pid_t curproc_pid;
     int result;
 
     if (options != 0) {
@@ -168,28 +172,28 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     }
 
     spinlock_acquire(&child->p_lock);
-    child_status = child->exit_status;
-    child_ppid = child->ppid;
-    spinlock_release(&child->p_lock);
-
     spinlock_acquire(&curproc->p_lock);
-    curproc_pid = curproc->pid;
-    spinlock_release(&curproc->p_lock);
-    
-    if (child_ppid != curproc_pid) {
+    if (child->ppid != curproc->pid) {
+        spinlock_release(&curproc->p_lock);
+        spinlock_release(&child->p_lock);
         return ECHILD;
     }
-
-    lock_acquire(child->waitpid_lock);
-    cv_wait(child->waitpid_cv, child->waitpid_lock);
-    lock_release(child->waitpid_lock);
+    spinlock_release(&curproc->p_lock);
+    if (child->p_state != S_ZOMBIE) {
+        spinlock_release(&child->p_lock);
+        lock_acquire(child->waitpid_lock);
+        cv_wait(child->waitpid_cv, child->waitpid_lock);
+        lock_release(child->waitpid_lock);
+        spinlock_acquire(&child->p_lock);
+    }
+    child_status = child->exit_status;
+    spinlock_release(&child->p_lock);
 
     proclist_lock_acquire();
     // TODO(aabo): Looking through the linked list above and here is
     // inefficient.
     child = proclist_remove(pid);
     proclist_lock_release();
-
 
     proc_destroy(child);
     if (status != NULL) {

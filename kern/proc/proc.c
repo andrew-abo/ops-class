@@ -547,6 +547,7 @@ void proclist_reparent(pid_t pid)
 
 	for (p = proclist; p != NULL; p = p->next) {
 		if (p->ppid == pid) {
+			kprintf("reparenting child of %d\n", pid);
 			p->ppid = 1;
 		}
 	}

@@ -149,6 +149,9 @@ common_prog(int nargs, char **args)
 		proc_destroy(proc);
 		return result;
 	}
+	// TODO(aabo): hangs if runprogram fails, e.g. file not found.
+	// Should this whole thing be re-written to use fork() instad of
+	// thread_fork()?  Who's calling _exit() when runprogram succeeds?
 	sys_waitpid(proc->pid, NULL, 0);
 
 	/*
