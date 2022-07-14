@@ -13,8 +13,10 @@
 #include <current.h>
 #include <proc.h>
 #include <kern/errno.h>
+#include <kern/fcntl.h>
 #include <kern/wait.h>
 #include <synch.h>
+#include <vfs.h>
 
 // Initial number of max elements in pointer list.
 #define string_list_INITIAL_MAX 2
@@ -26,6 +28,8 @@
 struct string_list {
     int used;  // Number of non-empty elements in list.
     int max;  // Max number of elements in list before resize. 
+    size_t size;  // Unaligned total bytes including: string pointers,
+                   // chars, \0 terminations.
     char **list;  // Array of pointers.
 };
 
@@ -234,6 +238,7 @@ static struct string_list
     }
     plist->used = 0;
     plist->max = string_list_INITIAL_MAX;
+    plist->size = 0;
     plist->list = kmalloc(sizeof(char *) * (plist->max));
     if (plist->list == NULL) {
         kfree(plist);
@@ -293,6 +298,8 @@ string_list_append(struct string_list *plist, char *value)
         plist->max = new_max;
     }
     plist->list[plist->used] = value;
+    // Update total bytes including null termination and string pointer.
+    plist->size += sizeof(char) * (strlen(value) + 1) + sizeof(char *);
     return plist->used++;
 }
 
@@ -312,16 +319,15 @@ copyin_args(userptr_t args, struct string_list **arg_list)
     size_t got;
     userptr_t arg;  // User space string.
     char *karg;  // Kernel space string.
-    size_t mem_args;  // Bytes used by args itself and referenced data.
     int result;
 
+    KASSERT(arg_list != NULL);
     *arg_list = string_list_create();
     if (*arg_list == NULL) {
         return ENOMEM;
     }
-    mem_args = 0;
     do {
-        if (mem_args > ARG_MAX) {
+        if ((*arg_list)->size > ARG_MAX) {
             string_list_destroy(*arg_list);
             return E2BIG;
         }
@@ -348,12 +354,62 @@ copyin_args(userptr_t args, struct string_list **arg_list)
             string_list_destroy(*arg_list);
             return E2BIG;
         }
-        // Count string chars and pointer to string against ARG_MAX.
-        mem_args += sizeof(char) * got + sizeof(karg);
-        // args is userptr_t, so we have to help the math.
+        // args is userptr_t, so pointer arithmetic in bytes.
         args += sizeof(char *);
     } while (1);
+    // Include NULL pointer argv termination.
+    result = string_list_append(*arg_list, (char *)NULL);
+    if (result) {
+        string_list_destroy(*arg_list);
+        return result;
+    }
     return 0;
+}
+
+/*
+ * Writes out arg_list to user space stack.
+ *
+ * Stack be formatted as follows, such that we
+ * can pass back argv as a contiguous array of pointers.
+ *  
+ * arg0\0arg1\0arg2\0\0  <-- highest stack addr
+ * NULL
+ * arg2_ptr  32b pointer
+ * arg1_ptr  32b pointer
+ * arg0_ptr  32b pointer <--stackptr
+ * 
+ * Modifies stackptr to point to arg0_ptr, which can be 
+ * used to set argv by the caller, for example.
+ * 
+ * Args:
+ *   arg_list: Pointer to list of strings.
+ *   stackptr: Highest address in user stack.
+ * 
+ * Returns:
+ *   New stackptr (set below args copy).
+ */ 
+static vaddr_t
+copyout_args(struct string_list *arg_list, vaddr_t stackptr)
+{
+    vaddr_t dst;  // Where next byte goes (user space).
+    char *src;  // Where next byte comes from (kernel space).
+    size_t alignment = sizeof(char *) - 1;
+    size_t aligned_size;
+
+    KASSERT(arg_list != NULL);
+    KASSERT(stackptr != (vaddr_t)NULL);
+    aligned_size = (arg_list->size + alignment) & ~alignment; 
+    stackptr -= aligned_size;
+    dst = stackptr + sizeof(char *) * arg_list->used;
+    
+    for (int i = 0; i < arg_list->used; i++) {
+        ((char *)stackptr)[i] = dst;
+        for (src = arg_list->list[i]; *src != '\0'; src++) {
+            *(char *)dst++ = *src;
+        }
+        *(char *)(dst++) = '\0';
+    }
+    return stackptr;
 }
 
 /*
@@ -374,6 +430,10 @@ int sys_execv(userptr_t progname, userptr_t args)
     size_t got;
     int argc;
     int result;
+	struct addrspace *as;
+	struct vnode *v;
+	vaddr_t entrypoint, stackptr;
+    userptr_t argv;
 
     result = copyinstr(progname, kprogname, PATH_MAX, &got);
     if (result) {
@@ -384,15 +444,55 @@ int sys_execv(userptr_t progname, userptr_t args)
         return result;
     }
 
-    argc = arg_list->used;
-    kprintf("execv()\n");
-    kprintf("argc = %d\n", argc);
-    for (int i = 0; i < argc; i++) {
-        kprintf("argv[%d] = %s\n", i, arg_list->list[i]);
-    }
+	/* Open the file. */
+	result = vfs_open(kprogname, O_RDONLY, 0, &v);
+	if (result) {
+		return result;
+	}
+    // TODO(aabo): check if file is executable.
 
+	/* We should be a new process. */
+	KASSERT(proc_getas() == NULL);
+
+	/* Create a new address space. */
+	as = as_create();
+	if (as == NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	proc_setas(as);
+	as_activate();
+
+	/* Load the executable. */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+	/* Define the user stack in the address space */
+	result = as_define_stack(as, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		return result;
+	}
+
+	stackptr = copyout_args(arg_list, stackptr);
+    argv = (userptr_t)stackptr;
     string_list_destroy(arg_list);
-    return 0;
+    argc = arg_list->used;
+	enter_new_process(argc, argv, NULL /*userspace addr of environment*/,
+			  stackptr, entrypoint);
+
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
 }
 
 /*
