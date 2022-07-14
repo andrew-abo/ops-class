@@ -213,8 +213,8 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
 
 // An expandable array of pointers.
 struct string_list {
-    size_t used;  // Number of non-empty elements in list.
-    size_t max;  // Max number of elements in list before resize. 
+    int used;  // Number of non-empty elements in list.
+    int max;  // Max number of elements in list before resize. 
     char **list;  // Array of pointers.
 };
 
@@ -242,16 +242,26 @@ static struct string_list
     return plist;
 }
 
+/*
+ * De-allocates all memory associated with plist.
+ */
 static void
 string_list_destroy(struct string_list *plist)
 {
     KASSERT(plist != NULL);
+    for (int i = 0; i < plist->used; i++) {
+        kfree(plist->list[i]);
+    }
     kfree(plist->list);
     kfree(plist);
 }
 
 /*
  * Appends a new element at end of list.
+ *
+ * New memory is not allocated for the element.
+ * The list directly references value which must
+ * be kmalloc'd by the caller.
  *
  * Args:
  *   plist: Pointer to list to append to.
@@ -299,37 +309,71 @@ string_list_append(struct string_list *plist, char *value)
  */
 int sys_execv(userptr_t progname, userptr_t args)
 {
-    (void)progname;
-    (void)args;
-    struct string_list *plist;
-    const char *a = "a";
-    const char *b = "b";
-    const char *c = "c";
-
-    plist = string_list_create();
-    KASSERT(plist != NULL);
-
+    char kprogname[PATH_MAX];
+    size_t got;
+    userptr_t arg;  // User space string.
+    char *karg;  // Kernel space string.
+    struct string_list *arg_list;
+    size_t mem_args;  // Bytes used by args itself and referenced data.
     int result;
-    for (int i = 0; i < 515; i++) {
-        result = string_list_append(plist, (char *)a);
-        kprintf("%d: %d\n", i, result);
+    int argc;
+
+    // Copy in arguments from user space to kernel space.
+    result = copyinstr(progname, kprogname, PATH_MAX, &got);
+    if (result) {
+        return result;
     }
-    string_list_append(plist, (char *)a);
-    string_list_append(plist, (char *)b);
-    string_list_append(plist, (char *)c);
-    string_list_append(plist, (char *)a);
-    string_list_append(plist, (char *)b);
-    string_list_append(plist, (char *)c);
-
-    kprintf("hello\n");
-
-    for (int i = 0; i < 6; i++) {
-        kprintf("plist->list[%d] = %s\n", i, plist->list[i]);
+    arg_list = string_list_create();
+    if (arg_list == NULL) {
+        return ENOMEM;
     }
-    kprintf("plist->used = %d\n", plist->used);
-    kprintf("plist->max = %d\n", plist->max);
+    mem_args = 0;
+    argc = 0;
+    do {
+        if (mem_args > ARG_MAX) {
+            string_list_destroy(arg_list);
+            return E2BIG;
+        }
+        // Cannot directly use *args, so use copyin.
+        result = copyin(args, (void *)&arg, sizeof(arg));
+        if (result) {
+            string_list_destroy(arg_list);
+            return result;
+        }
+        if (arg == NULL) {
+            break;
+        }
+        // Temporarily we over-allocate to handle longest args.
+        // We will pack more efficienty when we copyout to
+        // user space.
+        karg = kmalloc(sizeof(char) * PATH_MAX);
+        if (karg == NULL) {
+            return ENOMEM;
+        }
+        result = copyinstr(arg, karg, PATH_MAX, &got);
+        if (result) {
+            string_list_destroy(arg_list);
+            return result;
+        }
+        result = string_list_append(arg_list, karg);
+        if (result < 0) {
+            string_list_destroy(arg_list);
+            return E2BIG;
+        }
+        argc++;
+        // Count string chars and pointer to string against ARG_MAX.
+        mem_args += sizeof(char) * got + sizeof(karg);
+        // args is userptr_t, so we have to help the math.
+        args += sizeof(char *);
+    } while (1);
+    
+    kprintf("execv()\n");
+    kprintf("argc = %d\n", argc);
+    for (int i = 0; i < argc; i++) {
+        kprintf("argv[%d] = %s\n", i, arg_list->list[i]);
+    }
 
-    string_list_destroy(plist);
+    string_list_destroy(arg_list);
     return 0;
 }
 

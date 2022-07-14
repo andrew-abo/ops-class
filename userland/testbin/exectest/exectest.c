@@ -20,18 +20,24 @@ main(int argc, char **argv)
 	char arg0[] = "arg0";
 	char arg1[] = "arg1";
 	char arg2[] = "arg2";
-	char **my_args;
+	int result;
 	
 	args[0] = arg0;
 	args[1] = arg1;
 	args[2] = arg2;
 	args[3] = NULL;
-	my_args = args;
+	
+	printf("testexec\n");
+	for (char **p = args; *p != NULL; p++) {
+		printf("%s\n", *p);
+	}
+	printf("args = %p\n", args);
+	printf("----\n");
 
-	//for (char **p = my_args; *p != NULL; p++) {
-	//	printf("%s\n", *p);
-	//}
-	execv("test", my_args);
+	result = execv("test", (char **)args);
+	if (result) {
+		printf("execv failed: errno = %d\n", errno);
+	}
 
 
 	success(TEST161_SUCCESS, SECRET, "/testbin/exectest");	
