@@ -16,6 +16,19 @@
 #include <kern/wait.h>
 #include <synch.h>
 
+// Initial number of max elements in pointer list.
+#define string_list_INITIAL_MAX 2
+
+// Max number of elements in pointer list after resizing.
+#define string_list_MAX_MAX 512
+
+// An expandable array of strings.
+struct string_list {
+    int used;  // Number of non-empty elements in list.
+    int max;  // Max number of elements in list before resize. 
+    char **list;  // Array of pointers.
+};
+
 /*
  * Spawn a new process.
  *
@@ -205,19 +218,6 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     return 0;
 }
 
-// Initial number of max elements in pointer list.
-#define string_list_INITIAL_MAX 2
-
-// Max number of elements in pointer list after resizing.
-#define string_list_MAX_MAX 512
-
-// An expandable array of pointers.
-struct string_list {
-    int used;  // Number of non-empty elements in list.
-    int max;  // Max number of elements in list before resize. 
-    char **list;  // Array of pointers.
-};
-
 /*
  * Allocates a new pointer list.
  *
@@ -297,6 +297,66 @@ string_list_append(struct string_list *plist, char *value)
 }
 
 /*
+ * Copy args from user space to kernel space.
+ *
+ * Args:
+ *   args: Array of strings, with last element NULL.
+ *   arg_list: Return pointer for allocated list.
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
+static int
+copyin_args(userptr_t args, struct string_list **arg_list) 
+{
+    size_t got;
+    userptr_t arg;  // User space string.
+    char *karg;  // Kernel space string.
+    size_t mem_args;  // Bytes used by args itself and referenced data.
+    int result;
+
+    *arg_list = string_list_create();
+    if (*arg_list == NULL) {
+        return ENOMEM;
+    }
+    mem_args = 0;
+    do {
+        if (mem_args > ARG_MAX) {
+            string_list_destroy(*arg_list);
+            return E2BIG;
+        }
+        // Cannot directly use *args, so use copyin.
+        result = copyin(args, (void *)&arg, sizeof(arg));
+        if (result) {
+            string_list_destroy(*arg_list);
+            return result;
+        }
+        if (arg == NULL) {
+            break;
+        }
+        karg = kmalloc(sizeof(char) * PATH_MAX);
+        if (karg == NULL) {
+            return ENOMEM;
+        }
+        result = copyinstr(arg, karg, PATH_MAX, &got);
+        if (result) {
+            string_list_destroy(*arg_list);
+            return result;
+        }
+        result = string_list_append(*arg_list, karg);
+        if (result < 0) {
+            string_list_destroy(*arg_list);
+            return E2BIG;
+        }
+        // Count string chars and pointer to string against ARG_MAX.
+        mem_args += sizeof(char) * got + sizeof(karg);
+        // args is userptr_t, so we have to help the math.
+        args += sizeof(char *);
+    } while (1);
+    return 0;
+}
+
+/*
  * Replace current process with executable from filesystem.
  *
  * Args:
@@ -310,63 +370,21 @@ string_list_append(struct string_list *plist, char *value)
 int sys_execv(userptr_t progname, userptr_t args)
 {
     char kprogname[PATH_MAX];
-    size_t got;
-    userptr_t arg;  // User space string.
-    char *karg;  // Kernel space string.
     struct string_list *arg_list;
-    size_t mem_args;  // Bytes used by args itself and referenced data.
-    int result;
+    size_t got;
     int argc;
+    int result;
 
-    // Copy in arguments from user space to kernel space.
     result = copyinstr(progname, kprogname, PATH_MAX, &got);
     if (result) {
         return result;
     }
-    arg_list = string_list_create();
-    if (arg_list == NULL) {
-        return ENOMEM;
+    result = copyin_args(args, &arg_list);
+    if (result) {
+        return result;
     }
-    mem_args = 0;
-    argc = 0;
-    do {
-        if (mem_args > ARG_MAX) {
-            string_list_destroy(arg_list);
-            return E2BIG;
-        }
-        // Cannot directly use *args, so use copyin.
-        result = copyin(args, (void *)&arg, sizeof(arg));
-        if (result) {
-            string_list_destroy(arg_list);
-            return result;
-        }
-        if (arg == NULL) {
-            break;
-        }
-        // Temporarily we over-allocate to handle longest args.
-        // We will pack more efficienty when we copyout to
-        // user space.
-        karg = kmalloc(sizeof(char) * PATH_MAX);
-        if (karg == NULL) {
-            return ENOMEM;
-        }
-        result = copyinstr(arg, karg, PATH_MAX, &got);
-        if (result) {
-            string_list_destroy(arg_list);
-            return result;
-        }
-        result = string_list_append(arg_list, karg);
-        if (result < 0) {
-            string_list_destroy(arg_list);
-            return E2BIG;
-        }
-        argc++;
-        // Count string chars and pointer to string against ARG_MAX.
-        mem_args += sizeof(char) * got + sizeof(karg);
-        // args is userptr_t, so we have to help the math.
-        args += sizeof(char *);
-    } while (1);
-    
+
+    argc = arg_list->used;
     kprintf("execv()\n");
     kprintf("argc = %d\n", argc);
     for (int i = 0; i < argc; i++) {
