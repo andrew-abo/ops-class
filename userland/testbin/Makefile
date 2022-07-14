@@ -14,7 +14,7 @@ SUBDIRS=add argtest badcall bigexec bigfile bigfork bigseek bloat conman \
 	triplehuge triplemat triplesort usemtest waiter zero \
 	consoletest shelltest opentest readwritetest closetest stacktest writetest \
 	readtest lseektest getcwdtest chdirtest dup2test my_forktest getpidtest \
-	exittest
+	exittest exectest
 
 # But not:
 #    userthreads    (no support in kernel API in base system)

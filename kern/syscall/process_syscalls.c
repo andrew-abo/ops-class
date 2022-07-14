@@ -205,6 +205,134 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     return 0;
 }
 
+// Initial number of max elements in pointer list.
+#define string_list_INITIAL_MAX 2
+
+// Max number of elements in pointer list after resizing.
+#define string_list_MAX_MAX 512
+
+// An expandable array of pointers.
+struct string_list {
+    size_t used;  // Number of non-empty elements in list.
+    size_t max;  // Max number of elements in list before resize. 
+    char **list;  // Array of pointers.
+};
+
+/*
+ * Allocates a new pointer list.
+ *
+ * Returns:
+ *   Pointer to new list if successful, else NULL.
+ */
+static struct string_list 
+*string_list_create() {
+    struct string_list *plist;
+
+    plist = kmalloc(sizeof(struct string_list));
+    if (plist == NULL) {
+        return NULL;
+    }
+    plist->used = 0;
+    plist->max = string_list_INITIAL_MAX;
+    plist->list = kmalloc(sizeof(char *) * (plist->max));
+    if (plist->list == NULL) {
+        kfree(plist);
+        return NULL;
+    }
+    return plist;
+}
+
+static void
+string_list_destroy(struct string_list *plist)
+{
+    KASSERT(plist != NULL);
+    kfree(plist->list);
+    kfree(plist);
+}
+
+/*
+ * Appends a new element at end of list.
+ *
+ * Args:
+ *   plist: Pointer to list to append to.
+ *   value: Value of element to append.
+ * 
+ * Returns:
+ *   index of element appended if successful else -1.\
+ */
+static int 
+string_list_append(struct string_list *plist, char *value)
+{
+    char **new;
+    size_t new_max;
+
+    KASSERT(plist != NULL);
+    KASSERT(plist->used <= plist->max);
+    if (plist->used == plist->max) {
+        new_max = (plist->max) << 1;
+        if (new_max > string_list_MAX_MAX) {
+            return -1;
+        }
+        new = kmalloc(sizeof(char *) * new_max);
+        if (new == NULL) {
+            return -1;
+        }
+        memcpy(new, plist->list, (plist->used) * sizeof(char *));
+        kfree(plist->list);
+        plist->list = new;
+        plist->max = new_max;
+    }
+    plist->list[plist->used] = value;
+    return plist->used++;
+}
+
+/*
+ * Replace current process with executable from filesystem.
+ *
+ * Args:
+ *   progname: String of executable path.
+ *   args: Arguments to pass to progname.  List of strings, each NULL terminated,
+ *     with last string pointing to NULL.
+ * 
+ * Returns:
+ *   errno if error else does not return.
+ */
+int sys_execv(userptr_t progname, userptr_t args)
+{
+    (void)progname;
+    (void)args;
+    struct string_list *plist;
+    const char *a = "a";
+    const char *b = "b";
+    const char *c = "c";
+
+    plist = string_list_create();
+    KASSERT(plist != NULL);
+
+    int result;
+    for (int i = 0; i < 515; i++) {
+        result = string_list_append(plist, (char *)a);
+        kprintf("%d: %d\n", i, result);
+    }
+    string_list_append(plist, (char *)a);
+    string_list_append(plist, (char *)b);
+    string_list_append(plist, (char *)c);
+    string_list_append(plist, (char *)a);
+    string_list_append(plist, (char *)b);
+    string_list_append(plist, (char *)c);
+
+    kprintf("hello\n");
+
+    for (int i = 0; i < 6; i++) {
+        kprintf("plist->list[%d] = %s\n", i, plist->list[i]);
+    }
+    kprintf("plist->used = %d\n", plist->used);
+    kprintf("plist->max = %d\n", plist->max);
+
+    string_list_destroy(plist);
+    return 0;
+}
+
 /*
  * Debugging aid.
  *
