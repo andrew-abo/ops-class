@@ -35,10 +35,11 @@ main(int argc, char **argv)
 	printf("----\n");
 
 	result = execv("/testbin/myapp", (char **)args);
+	// See myapp.c for success criteria.
 	if (result) {
-		printf("execv failed: errno = %d\n", errno);
+		err(1, "execv failed: errno = %d\n", errno);
 	}
 
-	success(TEST161_SUCCESS, SECRET, "/testbin/exectest");	
+	success(TEST161_FAIL, SECRET, "/testbin/exectest");	
 	return 0;
 }
