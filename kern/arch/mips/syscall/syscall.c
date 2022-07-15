@@ -265,10 +265,10 @@ enter_forked_process(void *arg1, unsigned long unused_arg2)
 	tf_copy = (struct trapframe *)arg1;
 	(void)unused_arg2;
     result = trapframe_load(curthread, &tf, tf_copy);
+	kfree(tf_copy);
 	if (result) {
 		panic("enter_forked_process: Unable to load trapframe.");
 	}
-	kfree(tf_copy);
 	tf->tf_v0 = 0;  // Child returns 0 from fork().
 	tf->tf_a3 = 0;  // No error.
 	tf->tf_epc += 4;  // Step past originating syscall.

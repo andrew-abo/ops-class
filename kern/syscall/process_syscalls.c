@@ -489,6 +489,7 @@ int sys_execv(userptr_t progname, userptr_t args)
     argv = (userptr_t)stackptr;
     // Don't count terminating NULL element in arg count.
     argc = arg_list->used - 1;
+    KASSERT(argc > 0);
     string_list_destroy(arg_list);
 	enter_new_process(argc, argv, NULL /*userspace addr of environment*/,
 			  stackptr, entrypoint);
