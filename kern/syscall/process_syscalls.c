@@ -18,8 +18,8 @@
 #include <synch.h>
 #include <vfs.h>
 
-// Initial number of max elements in pointer list.
-#define string_list_INITIAL_MAX 2
+// Initial number of max strings in list.
+#define string_list_INITIAL_MAX 16
 
 // Max number of elements in pointer list after resizing.
 #define string_list_MAX_MAX 512
@@ -280,6 +280,7 @@ string_list_append(struct string_list *plist, char *value)
 {
     char **new;
     size_t new_max;
+    size_t string_size;
 
     KASSERT(plist != NULL);
     KASSERT(plist->used <= plist->max);
@@ -299,7 +300,9 @@ string_list_append(struct string_list *plist, char *value)
     }
     plist->list[plist->used] = value;
     // Update total bytes including null termination and string pointer.
-    plist->size += sizeof(char) * (strlen(value) + 1) + sizeof(char *);
+    // Handle value == NULL which signifies end of argv.
+    string_size = value ? strlen(value) + 1 : 0;
+    plist->size += sizeof(char) * string_size + sizeof(char *);
     return plist->used++;
 }
 
@@ -359,9 +362,9 @@ copyin_args(userptr_t args, struct string_list **arg_list)
     } while (1);
     // Include NULL pointer argv termination.
     result = string_list_append(*arg_list, (char *)NULL);
-    if (result) {
+    if (result < 0) {
         string_list_destroy(*arg_list);
-        return result;
+        return ENOMEM;
     }
     return 0;
 }
@@ -403,7 +406,12 @@ copyout_args(struct string_list *arg_list, vaddr_t stackptr)
     dst = stackptr + sizeof(char *) * arg_list->used;
     
     for (int i = 0; i < arg_list->used; i++) {
-        ((char *)stackptr)[i] = dst;
+        src = arg_list->list[i];
+        if (src == NULL) {
+            ((char **)stackptr)[i] = (char *)NULL;
+            break;
+        }
+        ((char **)stackptr)[i] = (char *)dst;
         for (src = arg_list->list[i]; *src != '\0'; src++) {
             *(char *)dst++ = *src;
         }
@@ -449,10 +457,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	if (result) {
 		return result;
 	}
-    // TODO(aabo): check if file is executable.
-
-	/* We should be a new process. */
-	KASSERT(proc_getas() == NULL);
+    // TODO(aabo): check if file is executable?
 
 	/* Create a new address space. */
 	as = as_create();
@@ -467,14 +472,11 @@ int sys_execv(userptr_t progname, userptr_t args)
 
 	/* Load the executable. */
 	result = load_elf(v, &entrypoint);
+	vfs_close(v);
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
-		vfs_close(v);
 		return result;
 	}
-
-	/* Done with the file now. */
-	vfs_close(v);
 
 	/* Define the user stack in the address space */
 	result = as_define_stack(as, &stackptr);
@@ -485,8 +487,9 @@ int sys_execv(userptr_t progname, userptr_t args)
 
 	stackptr = copyout_args(arg_list, stackptr);
     argv = (userptr_t)stackptr;
+    // Don't count terminating NULL element in arg count.
+    argc = arg_list->used - 1;
     string_list_destroy(arg_list);
-    argc = arg_list->used;
 	enter_new_process(argc, argv, NULL /*userspace addr of environment*/,
 			  stackptr, entrypoint);
 

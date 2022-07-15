@@ -16,6 +16,7 @@ main(int argc, char **argv)
 {
 	(void)argc;
 	(void)argv;
+
 	char *args[4];
 	char arg0[] = "arg0";
 	char arg1[] = "arg1";
@@ -27,18 +28,16 @@ main(int argc, char **argv)
 	args[2] = arg2;
 	args[3] = NULL;
 	
-	printf("testexec\n");
-	for (char **p = args; *p != NULL; p++) {
-		printf("%s\n", *p);
+	printf("testexec running...\n");
+	for (int i = 0; i < 3; i++) {
+		printf("args[%d] = %s\n", i, args[i]);
 	}
-	printf("args = %p\n", args);
 	printf("----\n");
 
-	result = execv("test", (char **)args);
+	result = execv("/testbin/myapp", (char **)args);
 	if (result) {
 		printf("execv failed: errno = %d\n", errno);
 	}
-
 
 	success(TEST161_SUCCESS, SECRET, "/testbin/exectest");	
 	return 0;
