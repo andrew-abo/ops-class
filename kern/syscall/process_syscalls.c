@@ -153,9 +153,6 @@ sys__exit(int exitcode)
 
 	proc_remthread(curthread);
     proc_zombify(proc);
-    lock_acquire(proc->waitpid_lock);
-    cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
-    lock_release(proc->waitpid_lock);
     thread_exit();
 }
 
@@ -208,7 +205,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
 
     proclist_lock_acquire();
     // TODO(aabo): Looking through the linked list above and here is
-    // inefficient.
+    // inefficient.  A doubly-linked list would eliminate need for two lookups.
     child = proclist_remove(pid);
     proclist_lock_release();
 

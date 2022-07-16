@@ -322,8 +322,11 @@ proc_create_runprogram(const char *name)
 		VOP_INCREF(curproc->p_cwd);
 		newproc->p_cwd = curproc->p_cwd;
 	}
-	copy_file_descriptor_table(newproc, curproc);
 	spinlock_release(&curproc->p_lock);
+
+	lock_acquire(curproc->files_lock);
+	copy_file_descriptor_table(newproc, curproc);
+	lock_release(curproc->files_lock);
 
 	/* Process fields */
 	newproc->pid = 1;

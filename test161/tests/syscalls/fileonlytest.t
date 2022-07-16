@@ -10,4 +10,6 @@ depends: [console]
 sys161:
   ram: 512K
 ---
+khu
 p /testbin/fileonlytest
+khu

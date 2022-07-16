@@ -152,7 +152,14 @@ common_prog(int nargs, char **args)
 	// TODO(aabo): hangs if runprogram fails, e.g. file not found.
 	// Should this whole thing be re-written to use fork() instad of
 	// thread_fork()?  Who's calling _exit() when runprogram succeeds?
-	sys_waitpid(proc->pid, NULL, 0);
+	// thread_exit() for example does not cv_broadcast, so we never wakeup here.
+	// How should sys__exit() and thread_exit() be partitioned?
+	// Strictly speaking, in a multithread system, each thread_exit would not
+	// necessarily signal the process is dead.
+	result = sys_waitpid(proc->pid, NULL, 0);
+	if (result) {
+		return result;
+	}
 
 	/*
 	 * The new process will be destroyed when the program exits...

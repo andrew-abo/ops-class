@@ -5,4 +5,6 @@ description:
 tags: [sys_exec,procsyscalls,syscalls]
 depends: [shell]
 ---
+khu
 $ /testbin/argtest
+khu

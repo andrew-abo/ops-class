@@ -104,6 +104,5 @@ runprogram(char *progname)
 
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
-	return EINVAL;
 }
 

@@ -7,4 +7,6 @@ depends: [console]
 sys161:
   ram: 4M
 ---
+khu
 p /testbin/forktest
+khu
