@@ -133,6 +133,9 @@ sys__exit(int exitcode)
     proc = curproc;
 
     spinlock_acquire(&proc->p_lock);
+    // We don't support multiple threads per process.  If there is more than
+    // one thread active we don't support properly killing them all.
+    KASSERT(proc->p_numthreads == 1);
     proc->exit_status = _MKWAIT_EXIT(exitcode);
     spinlock_release(&proc->p_lock);
 
@@ -151,7 +154,6 @@ sys__exit(int exitcode)
     }
     lock_release(proc->files_lock);
 
-	proc_remthread(curthread);
     proc_zombify(proc);
     thread_exit();
 }

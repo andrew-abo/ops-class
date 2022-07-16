@@ -222,7 +222,6 @@ proc_zombify(struct proc *proc)
         lock_destroy(proc->p_cwd_lock);
 		proc->p_cwd_lock = NULL;
 	}
-	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 	if (proc->files_lock) {
 		lock_destroy(proc->files_lock);
