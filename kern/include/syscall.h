@@ -62,6 +62,7 @@ int sys_chdir(const_userptr_t pathname);
 int sys_close(int fd, int lock_fd_table);
 int sys_dup2(int oldfd, int newdfd);
 int sys_execv(userptr_t progname, userptr_t args);
+void sys_exit_sig(int code);
 void sys__exit(int exitcode);
 int sys_fork(pid_t *pid, struct trapframe *tf);
 int sys_getpid(pid_t *pid);

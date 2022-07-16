@@ -124,8 +124,8 @@ int sys_getpid(pid_t *pid)
  * Args:
  *   exitcode: User supplied exit code.
  */
-void
-sys__exit(int exitcode)
+static void
+sys_exit_common(unsigned exit_status)
 {
     struct proc *proc;
 
@@ -136,7 +136,7 @@ sys__exit(int exitcode)
     // We don't support multiple threads per process.  If there is more than
     // one thread active we don't support properly killing them all.
     KASSERT(proc->p_numthreads == 1);
-    proc->exit_status = _MKWAIT_EXIT(exitcode);
+    proc->exit_status = exit_status;
     spinlock_release(&proc->p_lock);
 
     proclist_lock_acquire();    
@@ -156,6 +156,28 @@ sys__exit(int exitcode)
 
     proc_zombify(proc);
     thread_exit();
+}
+
+/*
+ * Exits current process from a signal handler.
+ *
+ * Args:
+ *   code: Signal number, such as SIGSEGV.
+ */
+void sys_exit_sig(int sig)
+{
+    sys_exit_common(_MKWAIT_SIG(sig));
+}
+
+/*
+ * Exits the current process.
+ *
+ * Args
+ *   exitcode: User supplied exit code.
+ */
+void sys__exit(int exitcode)
+{
+    sys_exit_common(_MKWAIT_EXIT(exitcode));
 }
 
 /*
