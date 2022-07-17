@@ -22,7 +22,10 @@
 #define string_list_INITIAL_MAX 16
 
 // Max number of elements in pointer list after resizing.
-#define string_list_MAX_MAX 512
+#define string_list_MAX_MAX 1024
+
+// Max chars per arg for execv.
+#define ARG_SIZE 1024
 
 // An expandable array of strings.
 struct string_list {
@@ -351,7 +354,8 @@ copyin_args(userptr_t args, struct string_list **arg_list)
 {
     size_t got;
     userptr_t arg;  // User space string.
-    char *karg;  // Kernel space string.
+    char *karg;  // Kernel space string (oversized)
+    char *karg_copy;  // Just sized copy.
     int result;
 
     KASSERT(arg_list != NULL);
@@ -359,37 +363,56 @@ copyin_args(userptr_t args, struct string_list **arg_list)
     if (*arg_list == NULL) {
         return ENOMEM;
     }
+    // Temporarily store incoming args on heap so we don't overflow the stack.
+    karg = kmalloc(ARG_SIZE);
+    if (karg == NULL) {
+        string_list_destroy(*arg_list);
+        return ENOMEM;
+    }
     do {
         if ((*arg_list)->size > ARG_MAX) {
+            kfree(karg);
             string_list_destroy(*arg_list);
             return E2BIG;
         }
         // Cannot directly use *args, so use copyin.
         result = copyin(args, (void *)&arg, sizeof(arg));
         if (result) {
+            kfree(karg);
             string_list_destroy(*arg_list);
             return result;
         }
         if (arg == NULL) {
             break;
         }
-        karg = kmalloc(sizeof(char) * PATH_MAX);
-        if (karg == NULL) {
-            return ENOMEM;
-        }
-        result = copyinstr(arg, karg, PATH_MAX, &got);
+        result = copyinstr(arg, karg, ARG_SIZE, &got);
         if (result) {
+            kfree(karg);
             string_list_destroy(*arg_list);
             return result;
         }
-        result = string_list_append(*arg_list, karg);
+        if (got == ARG_SIZE) {
+            kfree(karg);
+            string_list_destroy(*arg_list);
+            return E2BIG;
+        }
+        karg_copy = kmalloc(got);
+        if (karg_copy == NULL) {
+            kfree(karg);
+            string_list_destroy(*arg_list);
+            return ENOMEM;
+        }
+        memcpy(karg_copy, karg, got);
+        result = string_list_append(*arg_list, karg_copy);
         if (result < 0) {
+            kfree(karg);
             string_list_destroy(*arg_list);
             return E2BIG;
         }
         // args is userptr_t, so pointer arithmetic in bytes.
         args += sizeof(char *);
     } while (1);
+    kfree(karg);
     // Include NULL pointer argv termination.
     result = string_list_append(*arg_list, (char *)NULL);
     if (result < 0) {
@@ -463,7 +486,7 @@ copyout_args(struct string_list *arg_list, vaddr_t stackptr)
  */
 int sys_execv(userptr_t progname, userptr_t args)
 {
-    char kprogname[PATH_MAX];
+    char *kprogname;
     struct string_list *arg_list;
     size_t got;
     int argc;
@@ -473,17 +496,25 @@ int sys_execv(userptr_t progname, userptr_t args)
 	vaddr_t entrypoint, stackptr;
     userptr_t argv;
 
-    result = copyinstr(progname, kprogname, PATH_MAX, &got);
+    // Temporarily store incoming args on heap so we don't overflow the stack.
+    kprogname = kmalloc(ARG_SIZE);
+    if (kprogname == NULL) {
+        return ENOMEM;
+    }
+    result = copyinstr(progname, kprogname, ARG_SIZE, &got);
     if (result) {
+        kfree(kprogname);
         return result;
     }
     result = copyin_args(args, &arg_list);
     if (result) {
+        kfree(kprogname);
         return result;
     }
-
+    
 	/* Open the file. */
 	result = vfs_open(kprogname, O_RDONLY, 0, &v);
+    kfree(kprogname);
 	if (result) {
 		return result;
 	}
@@ -526,7 +557,6 @@ int sys_execv(userptr_t progname, userptr_t args)
 
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
-	return EINVAL;
 }
 
 /*
