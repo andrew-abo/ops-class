@@ -213,6 +213,12 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     }
 
     spinlock_acquire(&child->p_lock);
+    if (spinlock_do_i_hold(&curproc->p_lock)) {
+        // Must be attempting to wait for ourself.
+        KASSERT(curproc->pid == child->pid);
+        spinlock_release(&curproc->p_lock);
+        return ECHILD;
+    }
     spinlock_acquire(&curproc->p_lock);
     if (child->ppid != curproc->pid) {
         spinlock_release(&curproc->p_lock);

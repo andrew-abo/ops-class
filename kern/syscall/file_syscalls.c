@@ -83,7 +83,7 @@ sys_write(int fd, const userptr_t buf, size_t buflen, size_t *bytes_out)
     if (access == O_RDONLY) {
         kfree(kbuf);
         release_file_handle(fh);
-        return EACCES;
+        return EBADF;
     }
     uio_kinit(&iov, &my_uio, kbuf, buflen, fh->offset, UIO_WRITE);
     result = VOP_WRITE(fh->vn, &my_uio);
@@ -127,9 +127,11 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
     if (!fd_is_legal(fd)) {
         return EBADF;
     }
+
     lock_acquire(curproc->files_lock);
     fh = curproc->files[fd];
     lock_release(curproc->files_lock);
+ 
     if (fh == NULL) {
         return EBADF;
     }
@@ -137,12 +139,13 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
     if (kbuf == NULL) {
         return ENOMEM;
     }
+    
     lock_file_handle(fh);
     access = fh->flags & O_ACCMODE;
     if (access == O_WRONLY) {
         kfree(kbuf);
         release_file_handle(fh);
-        return EACCES;
+        return EBADF;
     }
     uio_kinit(&iov, &my_uio, kbuf, buflen, fh->offset, UIO_READ);
     result = VOP_READ(fh->vn, &my_uio);
@@ -160,6 +163,7 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
     *bytes_in = buflen - my_uio.uio_resid;
     fh->offset += *bytes_in;
     release_file_handle(fh);
+
     return 0;
 }
 
@@ -217,6 +221,7 @@ new_file_descriptor()
      if (result) {
          return result;
      }
+     fh->ref_count = 1;
      if (flags & O_APPEND) {
          result = VOP_STAT(fh->vn, &statbuf);
          if (result) {
@@ -225,6 +230,7 @@ new_file_descriptor()
          }
          fh->offset = statbuf.st_size;
      }
+
      lock_acquire(curproc->files_lock);
      *fd = new_file_descriptor();
      if (*fd < 0) {
@@ -234,8 +240,7 @@ new_file_descriptor()
      }
      curproc->files[*fd] = fh;
      lock_release(curproc->files_lock);
-     fh->ref_count = 1;
-     fh->flags = flags;
+
      return 0;
  }
 
