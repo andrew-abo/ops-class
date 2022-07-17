@@ -75,7 +75,7 @@ dodup2(int ofd, int nfd, const char *file)
 		err(1, "%s: dup2", file);
 	}
 	if (r != nfd) {
-		errx(1, "%s: dup2: Expected %d, got %d", nfd, r);
+		errx(1, "%s: dup2: Expected %d, got %d", file, nfd, r);
 	}
 }
 
@@ -162,7 +162,6 @@ cat(void)
 		warn("%s: execv", PATH_CAT);
 		_exit(1);
 	}
-
 	/* parent */
 	doclose(rfd, INFILE);
 	doclose(wfd, OUTFILE);

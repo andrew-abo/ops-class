@@ -121,6 +121,9 @@ int sys_getpid(pid_t *pid)
 /*
  * Exits the current process.
  *
+ * This function is shared by different methods of encoding exit status,
+ * such as encoding an exception signal or user supplied exitcode.
+ * 
  * Args:
  *   exitcode: User supplied exit code.
  */

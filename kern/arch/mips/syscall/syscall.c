@@ -81,7 +81,7 @@ syscall(struct trapframe *tf)
 	int callno;
 	int32_t retval;
 	size_t return_size;
-	int fd;
+	int fd, newfd;
 	int err;
 	off_t pos;
 	userptr_t whence_ptr;
@@ -132,7 +132,9 @@ syscall(struct trapframe *tf)
 		break;
 
 		case SYS_dup2:
-		err = sys_dup2((int)tf->tf_a0, (int)tf->tf_a1);
+		newfd = (int)tf->tf_a1;
+		err = sys_dup2((int)tf->tf_a0, newfd);
+		retval = newfd;
 		break;
 
 		case SYS_execv:
