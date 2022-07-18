@@ -25,13 +25,14 @@ main(int argc, char **argv)
 	int newfd;
 
 	// Test redirecting STDOUT to file works.
+	printf("Redirect STDOUT to %s...\n", FILENAME);
 	fd = open(FILENAME, O_WRONLY | O_TRUNC | O_CREAT);
 	if (fd < 0) {
 		err(1, "Cannot open %s for write", FILENAME);
 	}
 	result = dup2(fd, STDOUT_FILENO);
-	if (result) {
-		err(1, "Expected dup2 result 0, got %d", result);
+	if (result != STDOUT_FILENO) {
+		err(1, "Expected dup2 result %d, got %d", STDOUT_FILENO, result);
 	}
 	printf("%s", msg);
 	close(fd);
@@ -40,13 +41,14 @@ main(int argc, char **argv)
 	dup2(STDERR_FILENO, STDOUT_FILENO);
 
 	// Test if reading file matches msg.
+	printf("Redirect STDIN from %s...\n", FILENAME);
 	fd = open(FILENAME, O_RDONLY);
 	if (fd < 0) {
 		err(1, "Unable to open %s", FILENAME);
 	}
 	result = dup2(fd, STDIN_FILENO);
-	if (result) {
-		err(1, "Expected dup2 result 0, got %d", result);
+	if (result != STDIN_FILENO) {
+		err(1, "Expected dup2 result %d, got %d", STDIN_FILENO, result);
 	}
 	result = read(STDIN_FILENO, buf, sizeof(buf));
 	if (result != (int)strlen(msg)) {
@@ -59,17 +61,19 @@ main(int argc, char **argv)
 
 
 	// Test illegal file descriptor gives error.
+	printf("Checking bad calls to dup2...\n");
 	result = dup2(-1, 0);
-	if (result == 0) {
-		err(1, "dup2(-1, 0) expected non-zero error, got 0");
+	if (result >= 0) {
+		err(1, "dup2(-1, 0) expected -1, got %d", result);
 	}
 	result = dup2(0, 100000);
-	if (result == 0) {
-		err(1, "dup2(0, 100000) expected non-zero error, got 0");
+	if (result >= 0) {
+		err(1, "dup2(0, 100000) expected -1, got %d", result);
 	}
 
 	// Test closing a duplicated descriptor does not affect the
 	// other.
+	printf("Checking closing duplicated descriptor...\n");
 	fd = open(FILENAME, O_WRONLY | O_TRUNC | O_CREAT);
 	if (fd < 0) {
 		err(1, "Cannot open %s for write", FILENAME);
@@ -77,8 +81,8 @@ main(int argc, char **argv)
 	// Assume 2*fd is unused.
 	newfd = 2 * fd;
 	result = dup2(fd, newfd);
-	if (result) {
-		err(1, "Expected dup2 result 0, got %d", result);
+	if (result != newfd) {
+		err(1, "Expected dup2 result %d, got %d", newfd, result);
 	}
 	close(fd);
 	// Should still be able to write to newfd which references same file handle.
