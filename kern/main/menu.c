@@ -149,15 +149,14 @@ common_prog(int nargs, char **args)
 		proc_destroy(proc);
 		return result;
 	}
+
+	// Child calls exit() when finished via crt0, which cleans up
+	// the child proc and signals parent here that it is done, so
+	// we can reap the residual proc struct.
 	result = sys_waitpid(proc->pid, NULL, 0);
 	if (result) {
 		return result;
 	}
-
-	/*
-	 * The new process will be destroyed when the program exits...
-	 * once you write the code for handling that.
-	 */
 
 	// Wait for all threads to finish cleanup, otherwise khu be a bit behind,
 	// especially once swapping is enabled.

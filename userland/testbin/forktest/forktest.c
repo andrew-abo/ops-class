@@ -55,18 +55,9 @@ static char filename[32];
 static volatile int mypid;
 
 // Debugging aid.
-void spin(void);
-void spin() 
-{
-	while (1)
-	;
-}
-
-// Debugging aid.
 // Since stdout is mixed, we can use files as separate
 // outputs per process.  You need to remove all the files
 // before re-running, otherwise they keep appending.
-static void pidprint(pid_t pid, char *msg);
 static void pidprint(pid_t pid, char *msg)
 {
 	int fd;
@@ -289,8 +280,9 @@ test(int nowait)
 	int observed, expected;
 	char character = 'A';
 
-	memset(buffer, 0, 30);
-	len = read(fd, buffer, 30);
+	memset(buffer, 0, sizeof(buffer));
+	len = read(fd, buffer, sizeof(buffer));
+	close(fd);
 	printf("\n%s\n", buffer);
 	if(len != 30) {
 		err(1, "Did not get expected number of characters\n");
@@ -316,7 +308,6 @@ test(int nowait)
 	}
 	nprintf("\n");
 	success(TEST161_SUCCESS, SECRET, "/testbin/forktest");
-	close(fd);
 }
 
 int
