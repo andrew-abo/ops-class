@@ -282,7 +282,9 @@ copy_file_descriptor_table(struct proc *dst, const struct proc *src)
 		fh = src->files[fd];
 		dst->files[fd] = fh;
 		if (fh != NULL) {
+			lock_file_handle(fh);
 			fh->ref_count++;
+			release_file_handle(fh);
 		}
 	}
 }
@@ -456,7 +458,9 @@ proclist_insert(struct proc *newproc)
             KASSERT(p->pid > prev->pid);
             if (p->pid - prev->pid > 1) {
                 newproc->pid = prev->pid + 1;
+				spinlock_acquire(&prev->p_lock);
                 prev->next = newproc;
+				spinlock_release(&prev->p_lock);
                 newproc->next = p;
                 return 0;
             }
@@ -469,8 +473,10 @@ proclist_insert(struct proc *newproc)
 		proclist = newproc;
 		return 0;
 	}
-	prev->next = newproc;
+	spinlock_acquire(&prev->p_lock);
+	prev->next = newproc;	
 	newproc->pid = (prev->pid) + 1;
+	spinlock_release(&prev->p_lock);
 	return 0;
 }
 
@@ -498,7 +504,9 @@ struct proc *proclist_remove(pid_t pid)
 				proclist = p->next;
 				return p;
 			}
+			spinlock_acquire(&prev->p_lock);
 			prev->next = p->next;
+			spinlock_release(&prev->p_lock);
 			return p;
 		}
 		prev = p;
@@ -548,10 +556,11 @@ void proclist_reparent(pid_t pid)
 	struct proc *p;
 
 	for (p = proclist; p != NULL; p = p->next) {
+		spinlock_acquire(&p->p_lock);
 		if (p->ppid == pid) {
-			kprintf("reparenting child of %d\n", pid);
 			p->ppid = 1;
 		}
+		spinlock_release(&p->p_lock);
 	}
 }
 

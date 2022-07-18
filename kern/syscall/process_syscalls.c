@@ -144,11 +144,13 @@ sys_exit_common(unsigned exit_status)
     KASSERT(proc->p_numthreads == 1);
     proc->exit_status = exit_status;
     spinlock_release(&proc->p_lock);
-
-    proclist_lock_acquire();    
+    
+    proclist_lock_acquire();
     proclist_reparent(proc->pid);
     proclist_lock_release();
 
+    // Since we confirmed we're the only thread left in the process,
+    // it's a bit of overkill to requires from this point.
     lock_acquire(proc->files_lock);
 	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
         if (proc->files[fd] != NULL) {
@@ -217,7 +219,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
 
     spinlock_acquire(&child->p_lock);
     if (spinlock_do_i_hold(&curproc->p_lock)) {
-        // Must be attempting to wait for ourself.
+        // We are attempting to wait for ourself so abort.
         KASSERT(curproc->pid == child->pid);
         spinlock_release(&curproc->p_lock);
         return ECHILD;
