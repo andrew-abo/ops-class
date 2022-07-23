@@ -9,5 +9,7 @@ depends: [console]
 sys161:
   ram: 1M
 ---
+khu
 $ /testbin/shelltest
 $ /testbin/shelltest
+khu

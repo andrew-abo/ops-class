@@ -7,4 +7,6 @@ depends: [console,sys_open]
 sys161:
   ram: 512K
 ---
+khu
 p /testbin/closetest
+khu

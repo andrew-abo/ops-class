@@ -8,4 +8,6 @@ depends: [shell]
 sys161:
   ram: 4M
 ---
+khu
 $ /testbin/bigexec
+khu

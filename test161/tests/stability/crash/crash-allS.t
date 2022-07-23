@@ -8,4 +8,6 @@ depends: [shell,sys_fork]
 sys161:
   ram: 4M
 ---
+khu
 $ /testbin/crash *
+khu

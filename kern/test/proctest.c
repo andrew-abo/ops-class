@@ -59,12 +59,12 @@ proctest2(int nargs, char **args)
 		KASSERT(newproc[i] != NULL);
 		result = proclist_insert(newproc[i]);
 		KASSERT(result == 0);
-		KASSERT(newproc[i]->pid == PID_MIN + i);
+		KASSERT(newproc[i]->pid == i + 1);
 	}
 
 	// Delete one pid in the middle.
 	i = 2;
-	p = proclist_remove(PID_MIN + i);
+	p = proclist_remove(i + 1);
 	KASSERT(p != NULL);
 	proc_destroy(p);
 
@@ -73,11 +73,11 @@ proctest2(int nargs, char **args)
 	KASSERT(p != NULL);
 	result = proclist_insert(p);
 	KASSERT(result == 0);
-	KASSERT(p->pid == PID_MIN + i);
+	KASSERT(p->pid == i + 1);
 	
 	// Delete all the procs.
 	for (i = 0; i < NEWPROCS; i++) {
-		p = proclist_remove(PID_MIN + i);
+		p = proclist_remove(i + 1);
 		KASSERT(p != NULL);
 		proc_destroy(p);
 	}

@@ -7,8 +7,10 @@ depends: [shell]
 sys161:
   ram: 16M
 ---
+khu
 $ /testbin/forktest
 $ /testbin/forktest
 $ /testbin/forktest
 $ /testbin/forktest
 $ /testbin/forktest
+khu

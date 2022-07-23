@@ -8,4 +8,6 @@ depends: [console,sys_fork]
 sys161:
   ram: 1M
 ---
+khu
 p /testbin/redirect
+khu

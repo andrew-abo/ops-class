@@ -8,4 +8,6 @@ depends: [shell]
 sys161:
   ram: 1M
 ---
+khu
 $ /testbin/sparsefile test 1048
+khu

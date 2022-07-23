@@ -7,4 +7,6 @@ depends: [boot]
 sys161:
   ram: 512K
 ---
+khu
 p /testbin/consoletest
+khu
