@@ -50,13 +50,12 @@ struct string_list {
 int sys_fork(pid_t *pid, struct trapframe *tf)
 {
     struct proc *child;
-    struct proc *parent;
+    struct proc *parent = curproc;
     struct trapframe *tf_copy;
     int result;
 
     KASSERT(pid != NULL);
     KASSERT(tf != NULL);
-    parent = curproc;
     child = proc_create("fork");
     if (child == NULL) {
         return ENOMEM;
@@ -114,10 +113,11 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
  */
 int sys_getpid(pid_t *pid)
 {
+    struct proc *proc = curproc;
     KASSERT(pid != NULL);
-    spinlock_acquire(&curproc->p_lock);
-    *pid = curproc->pid;
-    spinlock_release(&curproc->p_lock);
+    spinlock_acquire(&proc->p_lock);
+    *pid = proc->pid;
+    spinlock_release(&proc->p_lock);
     return 0;
 }
 
@@ -133,10 +133,8 @@ int sys_getpid(pid_t *pid)
 static void
 sys_exit_common(unsigned exit_status)
 {
-    struct proc *proc;
-
     // curproc becomes NULL once we call proc_remthread, so save it.
-    proc = curproc;
+    struct proc *proc = curproc;
 
     spinlock_acquire(&proc->p_lock);
     // We don't support multiple threads per process.  If there is more than
@@ -150,7 +148,7 @@ sys_exit_common(unsigned exit_status)
     proclist_lock_release();
 
     // Since we confirmed we're the only thread left in the process,
-    // it's a bit of overkill to requires from this point.
+    // it's a bit of overkill to require locks from this point.
     lock_acquire(proc->files_lock);
 	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
         if (proc->files[fd] != NULL) {
@@ -202,9 +200,12 @@ void sys__exit(int exitcode)
  */
 int sys_waitpid(pid_t pid, userptr_t status, int options)
 {
+    struct proc *parent;
     struct proc *child;
     int child_status;
     int result;
+
+    parent = curproc;
 
     if (options != 0) {
         return EINVAL;
@@ -218,19 +219,19 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     }
 
     spinlock_acquire(&child->p_lock);
-    if (spinlock_do_i_hold(&curproc->p_lock)) {
+    if (spinlock_do_i_hold(&parent->p_lock)) {
         // We are attempting to wait for ourself so abort.
         KASSERT(curproc->pid == child->pid);
-        spinlock_release(&curproc->p_lock);
+        spinlock_release(&parent->p_lock);
         return ECHILD;
     }
-    spinlock_acquire(&curproc->p_lock);
-    if (child->ppid != curproc->pid) {
-        spinlock_release(&curproc->p_lock);
+    spinlock_acquire(&parent->p_lock);
+    if (child->ppid != parent->pid) {
+        spinlock_release(&parent->p_lock);
         spinlock_release(&child->p_lock);
         return ECHILD;
     }
-    spinlock_release(&curproc->p_lock);
+    spinlock_release(&parent->p_lock);
     if (child->p_state != S_ZOMBIE) {
         spinlock_release(&child->p_lock);
         lock_acquire(child->waitpid_lock);

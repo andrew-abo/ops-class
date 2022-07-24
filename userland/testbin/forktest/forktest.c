@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <err.h>
+#include <errno.h>
 #include <test161/test161.h>
 
 #define FORKTEST_FILENAME_BASE "forktest"
@@ -156,7 +157,7 @@ dowait(int nowait, int pid)
 		snprintf(msg, sizeof(msg), "waitpid(%d)\n", pid);
 		pidprint(mypid, msg);
 		if (waitpid(pid, &x, 0)<0) {
-			errx(1, "waitpid error");
+			errx(1, "waitpid errorno = %d", errno);
 		}
 		else if (WIFSIGNALED(x)) {
 			errx(1, "pid %d: signal %d", pid, WTERMSIG(x));
@@ -215,6 +216,9 @@ test(int nowait)
 		// 0, 1, 2 are stdin, stdout, stderr
 		err(1, "Failed to open file to write data into\n");
 	}
+
+	//pid_t rootpid;
+	//rootpid = getpid();
 
 	pid0 = dofork();
 	nprintf(".");
@@ -306,6 +310,7 @@ test(int nowait)
 			err(1, "Failed! Expected %d%cs..observed: %d\n", expected, character + char_idx, observed);
 		}
 	}
+
 	nprintf("\n");
 	success(TEST161_SUCCESS, SECRET, "/testbin/forktest");
 }

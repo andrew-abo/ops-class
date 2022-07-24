@@ -301,6 +301,7 @@ copy_file_descriptor_table(struct proc *dst, const struct proc *src)
 struct proc *
 proc_create_runprogram(const char *name)
 {
+	struct proc *proc = curproc;
 	struct proc *newproc;
 
 	newproc = proc_create(name);
@@ -318,16 +319,16 @@ proc_create_runprogram(const char *name)
 	 * (We don't need to lock the new process, though, as we have
 	 * the only reference to it.)
 	 */
-	spinlock_acquire(&curproc->p_lock);
-	if (curproc->p_cwd != NULL) {
-		VOP_INCREF(curproc->p_cwd);
-		newproc->p_cwd = curproc->p_cwd;
+	spinlock_acquire(&proc->p_lock);
+	if (proc->p_cwd != NULL) {
+		VOP_INCREF(proc->p_cwd);
+		newproc->p_cwd = proc->p_cwd;
 	}
-	spinlock_release(&curproc->p_lock);
+	spinlock_release(&proc->p_lock);
 
-	lock_acquire(curproc->files_lock);
-	copy_file_descriptor_table(newproc, curproc);
-	lock_release(curproc->files_lock);
+	lock_acquire(proc->files_lock);
+	copy_file_descriptor_table(newproc, proc);
+	lock_release(proc->files_lock);
 
 	/* Process fields */
 	newproc->pid = 1;

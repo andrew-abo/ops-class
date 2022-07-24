@@ -57,15 +57,16 @@ sys_write(int fd, const userptr_t buf, size_t buflen, size_t *bytes_out)
     struct file_handle *fh;
     int result;
     int access;
+    struct proc *proc = curproc;
 
     KASSERT(bytes_out != NULL);
     *bytes_out = 0;
     if (!fd_is_legal(fd)) {
         return EBADF;
     }
-    lock_acquire(curproc->files_lock);
-    fh = curproc->files[fd];
-    lock_release(curproc->files_lock);
+    lock_acquire(proc->files_lock);
+    fh = proc->files[fd];
+    lock_release(proc->files_lock);
     if (fh == NULL) {
         return EBADF;
     }
@@ -121,6 +122,7 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
     struct file_handle *fh;
     int result;
     int access;
+    struct proc *proc = curproc;
 
     KASSERT(bytes_in != NULL);
     *bytes_in = 0;
@@ -128,9 +130,9 @@ sys_read(int fd, userptr_t buf, size_t buflen, size_t *bytes_in)
         return EBADF;
     }
 
-    lock_acquire(curproc->files_lock);
-    fh = curproc->files[fd];
-    lock_release(curproc->files_lock);
+    lock_acquire(proc->files_lock);
+    fh = proc->files[fd];
+    lock_release(proc->files_lock);
  
     if (fh == NULL) {
         return EBADF;
@@ -177,10 +179,11 @@ static int
 new_file_descriptor()
 {
     int fd;
+    struct proc *proc = curproc;
 
     // Reserve 0, 1, 2 for STDIN, STDOUT, STDERR.
     for (fd = 3; fd < FILES_PER_PROCESS_MAX; fd++) {
-        if (curproc->files[fd] == NULL) {
+        if (proc->files[fd] == NULL) {
             return fd;
         }
     }
@@ -208,6 +211,7 @@ new_file_descriptor()
      struct file_handle *fh;
      struct stat statbuf;
      int result;
+     struct proc *proc = curproc;
 
      KASSERT(fd != NULL);
      result = copyinstr(filename, kfilename, PATH_MAX, &filename_len);
@@ -231,15 +235,15 @@ new_file_descriptor()
          fh->offset = statbuf.st_size;
      }
 
-     lock_acquire(curproc->files_lock);
+     lock_acquire(proc->files_lock);
      *fd = new_file_descriptor();
      if (*fd < 0) {
-         lock_release(curproc->files_lock);
+         lock_release(proc->files_lock);
          destroy_file_handle(fh);
          return EMFILE;
      }
-     curproc->files[*fd] = fh;
-     lock_release(curproc->files_lock);
+     proc->files[*fd] = fh;
+     lock_release(proc->files_lock);
 
      return 0;
  }
@@ -262,22 +266,23 @@ new_file_descriptor()
 int
 sys_close(int fd, int lock_fd_table)
 {
+    struct proc *proc = curproc;
     struct file_handle *fh;
-
+    
     if (!fd_is_legal(fd)) {
         return EBADF;
     }
     if (lock_fd_table) {
-        lock_acquire(curproc->files_lock);
+        lock_acquire(proc->files_lock);
     }
-    fh = curproc->files[fd];
+    fh = proc->files[fd];
     if (fh == NULL) {
         if (lock_fd_table) {
-            lock_release(curproc->files_lock);
+            lock_release(proc->files_lock);
         }
         return EBADF;
     }
-    curproc->files[fd] = NULL;
+    proc->files[fd] = NULL;
     lock_file_handle(fh);
     // Checking ref_count atomically requires duplicating the lock releases
     // in both clauses.
@@ -289,13 +294,13 @@ sys_close(int fd, int lock_fd_table)
         release_file_handle(fh);
         destroy_file_handle(fh);
         if (lock_fd_table) {
-            lock_release(curproc->files_lock);
+            lock_release(proc->files_lock);
         }
         return 0;
     }
     release_file_handle(fh);
     if (lock_fd_table) {
-        lock_release(curproc->files_lock);
+        lock_release(proc->files_lock);
     }
     return 0;
 }
@@ -314,6 +319,7 @@ int
 sys_dup2(int oldfd, int newfd)
 {
     struct file_handle *fh;
+    struct proc *proc = curproc;
 
     if (!fd_is_legal(oldfd) || !fd_is_legal(newfd)) {
         return EBADF;
@@ -321,22 +327,22 @@ sys_dup2(int oldfd, int newfd)
     if (oldfd == newfd) {
         return 0;
     }
-    lock_acquire(curproc->files_lock);
-    if (curproc->files[oldfd] == NULL) {
-        lock_release(curproc->files_lock);
+    lock_acquire(proc->files_lock);
+    if (proc->files[oldfd] == NULL) {
+        lock_release(proc->files_lock);
         return EBADF;
     }
-    if (curproc->files[newfd] != NULL) {
+    if (proc->files[newfd] != NULL) {
         // Close without locking file descriptor table since we already
         // have the lock and want to keep operations atomic.
         sys_close(newfd, 0);
     }
-    curproc->files[newfd] = curproc->files[oldfd];
-    fh = curproc->files[newfd];
+    proc->files[newfd] = proc->files[oldfd];
+    fh = proc->files[newfd];
     lock_file_handle(fh);
     fh->ref_count++;
     release_file_handle(fh);
-    lock_release(curproc->files_lock);
+    lock_release(proc->files_lock);
     return 0;
 }
 
@@ -359,13 +365,14 @@ sys_lseek(int fd, off_t pos, int whence, off_t *return_offset)
     struct file_handle *fh;
     struct stat statbuf;
     off_t abs_offset = -1;  // Absolute byte position relative to start of file.
+    struct proc *proc = curproc;
 
     if (!fd_is_legal(fd)) {
         return EBADF;
     }
-    lock_acquire(curproc->files_lock);
-    fh = curproc->files[fd];
-    lock_release(curproc->files_lock);
+    lock_acquire(proc->files_lock);
+    fh = proc->files[fd];
+    lock_release(proc->files_lock);
     if (fh == NULL) {
         return EBADF;
     }
