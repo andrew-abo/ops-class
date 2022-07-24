@@ -33,7 +33,7 @@ struct string_list {
     int max;  // Max number of elements in list before resize. 
     size_t size;  // Unaligned total bytes including: string pointers,
                    // chars, \0 terminations.
-    char **list;  // Array of pointers.
+    char **list;  // Array of pointers to null-terminated strings.
 };
 
 /*
@@ -99,25 +99,6 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     }
     // Parent returns child pid.
     *pid = child->pid;
-    return 0;
-}
-
-/*
- * Gets current process ID.
- *
- * Args:
- *   pid: Pointer to return process ID.
- * 
- * Returns
- *   0 always.
- */
-int sys_getpid(pid_t *pid)
-{
-    struct proc *proc = curproc;
-    KASSERT(pid != NULL);
-    spinlock_acquire(&proc->p_lock);
-    *pid = proc->pid;
-    spinlock_release(&proc->p_lock);
     return 0;
 }
 
@@ -306,38 +287,39 @@ string_list_destroy(struct string_list *plist)
  *
  * Args:
  *   plist: Pointer to list to append to.
- *   value: Value of element to append.
+ *   new_string: Pointer to string to append.
  * 
  * Returns:
  *   index of element appended if successful else -1.\
  */
 static int 
-string_list_append(struct string_list *plist, char *value)
+string_list_append(struct string_list *plist, char *new_string)
 {
-    char **new;
+    char **new_list;
     size_t new_max;
     size_t string_size;
 
     KASSERT(plist != NULL);
     KASSERT(plist->used <= plist->max);
     if (plist->used == plist->max) {
+        // Resize list size by doubling capactiy.
         new_max = (plist->max) << 1;
         if (new_max > string_list_MAX_MAX) {
             return -1;
         }
-        new = kmalloc(sizeof(char *) * new_max);
-        if (new == NULL) {
+        new_list = kmalloc(sizeof(char *) * new_max);
+        if (new_list == NULL) {
             return -1;
         }
-        memcpy(new, plist->list, (plist->used) * sizeof(char *));
+        memcpy(new_list, plist->list, (plist->used) * sizeof(char *));
         kfree(plist->list);
-        plist->list = new;
+        plist->list = new_list;
         plist->max = new_max;
     }
-    plist->list[plist->used] = value;
+    plist->list[plist->used] = new_string;
     // Update total bytes including null termination and string pointer.
     // Handle value == NULL which signifies end of argv.
-    string_size = value ? strlen(value) + 1 : 0;
+    string_size = new_string ? strlen(new_string) + 1 : 0;
     plist->size += sizeof(char) * string_size + sizeof(char *);
     return plist->used++;
 }
@@ -498,6 +480,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
     userptr_t argv;
+    struct addrspace *old_as;
 
     // Temporarily store incoming args on heap so we don't overflow the stack.
     kprogname = kmalloc(ARG_SIZE);
@@ -519,6 +502,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	result = vfs_open(kprogname, O_RDONLY, 0, &v);
     kfree(kprogname);
 	if (result) {
+        string_list_destroy(arg_list);
 		return result;
 	}
     // TODO(aabo): check if file is executable?
@@ -527,10 +511,12 @@ int sys_execv(userptr_t progname, userptr_t args)
 	as = as_create();
 	if (as == NULL) {
 		vfs_close(v);
+        string_list_destroy(arg_list);
 		return ENOMEM;
 	}
 
 	/* Switch to it and activate it. */
+	old_as = proc_getas();
 	proc_setas(as);
 	as_activate();
 
@@ -538,16 +524,24 @@ int sys_execv(userptr_t progname, userptr_t args)
 	result = load_elf(v, &entrypoint);
 	vfs_close(v);
 	if (result) {
-		/* p_addrspace will go away when curproc is destroyed */
+        string_list_destroy(arg_list);
+        proc_setas(old_as);
+        as_activate();
+        as_destroy(as);
 		return result;
 	}
 
 	/* Define the user stack in the address space */
 	result = as_define_stack(as, &stackptr);
 	if (result) {
-		/* p_addrspace will go away when curproc is destroyed */
+        string_list_destroy(arg_list);
+        proc_setas(old_as);
+        as_activate();
+        as_destroy(as);        
 		return result;
 	}
+    // Point of no return. Discard previous address space.
+    as_destroy(old_as);
 
 	stackptr = copyout_args(arg_list, stackptr);
     argv = (userptr_t)stackptr;
@@ -560,6 +554,25 @@ int sys_execv(userptr_t progname, userptr_t args)
 
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
+}
+
+/*
+ * Gets current process ID.
+ *
+ * Args:
+ *   pid: Pointer to return process ID.
+ * 
+ * Returns
+ *   0 always.
+ */
+int sys_getpid(pid_t *pid)
+{
+    struct proc *proc = curproc;
+    KASSERT(pid != NULL);
+    spinlock_acquire(&proc->p_lock);
+    *pid = proc->pid;
+    spinlock_release(&proc->p_lock);    
+    return 0;
 }
 
 /*

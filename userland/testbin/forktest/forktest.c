@@ -217,9 +217,6 @@ test(int nowait)
 		err(1, "Failed to open file to write data into\n");
 	}
 
-	//pid_t rootpid;
-	//rootpid = getpid();
-
 	pid0 = dofork();
 	nprintf(".");
 	write(fd, "A", 1);
