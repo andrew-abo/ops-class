@@ -53,6 +53,7 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     struct proc *parent = curproc;
     struct trapframe *tf_copy;
     int result;
+    struct file_handle *fh;
 
     KASSERT(pid != NULL);
     KASSERT(tf != NULL);
@@ -64,10 +65,6 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     if (result) {
         return result;
     }
-
-    lock_acquire(parent->files_lock);
-    copy_file_descriptor_table(child, parent);
-    lock_release(parent->files_lock);
 
     spinlock_acquire(&parent->p_lock);
     if (parent->p_cwd != NULL) {
@@ -83,6 +80,10 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
         return result;
     }
 
+    lock_acquire(parent->files_lock);
+    copy_file_descriptor_table(child, parent);
+    lock_release(parent->files_lock);
+
     proclist_lock_acquire();
     proclist_insert(child);
     proclist_lock_release();
@@ -91,9 +92,28 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     result = thread_fork("fork", child, enter_forked_process, (void *)tf_copy, 0);
     if (result) {
         kfree(tf_copy);
+
         proclist_lock_acquire();
         proclist_remove(child->pid);
         proclist_lock_release();
+
+        for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
+            fh = child->files[fd];
+            child->files[fd] = NULL;
+            if (fh != NULL) {
+                // Can't use sys_close() here because child != curproc. 
+                // Unfortunately, we have to duplicate some code for closing open descriptors.
+                lock_file_handle(fh);
+                fh->ref_count--;
+                if (fh->ref_count == 0) {
+                    vfs_close(fh->vn);
+                    release_file_handle(fh);
+                    destroy_file_handle(fh);
+                    continue;
+                }
+                release_file_handle(fh);
+            }
+        }
         proc_destroy(child);
         return result;
     }
@@ -202,7 +222,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     spinlock_acquire(&child->p_lock);
     if (spinlock_do_i_hold(&parent->p_lock)) {
         // We are attempting to wait for ourself so abort.
-        KASSERT(curproc->pid == child->pid);
+        KASSERT(parent->pid == child->pid);
         spinlock_release(&parent->p_lock);
         return ECHILD;
     }

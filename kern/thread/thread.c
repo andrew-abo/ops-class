@@ -799,7 +799,6 @@ thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
  *
  * Does not return.
  */
-// TODO(aabo): Is this comment above why I see memory leak on forktest?
 void
 thread_exit(void)
 {
