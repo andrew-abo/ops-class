@@ -122,9 +122,6 @@ common_prog(int nargs, char **args)
 	int result;
 	unsigned tc;
 
-	kprintf("common_prog: start\n");
-	kheap_printused();
-
 	/* Create a process for the new program to run in. */
 	proc = proc_create_runprogram(args[0] /* name */);
 	if (proc == NULL) {
@@ -157,8 +154,6 @@ common_prog(int nargs, char **args)
 	// the child proc and signals parent here that it is done, so
 	// we can reap the residual proc struct.
 	result = sys_waitpid(proc->pid, NULL, 0);
-	kprintf("Remaining processes after sys_waitpid():\n");
-	proclist_print();
 	if (result) {
 		return result;
 	}
@@ -167,8 +162,6 @@ common_prog(int nargs, char **args)
 	// especially once swapping is enabled.
 	thread_wait_for_count(tc);
 
-	kprintf("common_prog: end\n");
-	kheap_printused();
 	return 0;
 }
 

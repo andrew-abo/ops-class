@@ -18,23 +18,19 @@
 #include <synch.h>
 #include <vfs.h>
 
-// Initial number of max strings in list.
-#define STRING_LIST_INITIAL_MAX 16
+// Max allowed number of execv arguments.
+// This is arbitrary and should not limit use of ARG_MAX bytes total
+// size of arguments set by system.
+#define ARGC_MAX 4096
 
-// Max number of elements in pointer list after resizing.
-#define STRING_LIST_MAX_MAX 8192
+// Max chars for execv progname.
+// This is arbitrary and should not limit use of ARG_MAX bytes total
+// size of arguments set by system.
+#define PROGNAME_MAX 1024
 
-// Max chars per arg for execv.
-#define ARG_SIZE 65534
-
-// An expandable array of strings.
-struct string_list {
-    int used;  // Number of non-empty elements in list.
-    int max;  // Max number of elements in list before resize. 
-    size_t size;  // Unaligned total bytes including: string pointers,
-                   // chars, \0 terminations.
-    char **list;  // Array of pointers to null-terminated strings.
-};
+// Initial size in bytes of args image for execv.
+// We dynamically adjust this upwards to ARG_MAX as needed.
+//#define ARG_INITIAL 1024
 
 /*
  * Spawn a new process.
@@ -259,170 +255,85 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     return 0;
 }
 
-/*
- * Allocates a new pointer list.
- *
- * Returns:
- *   Pointer to new list if successful, else NULL.
- */
-static struct string_list 
-*string_list_create() {
-    struct string_list *plist;
-
-    plist = kmalloc(sizeof(struct string_list));
-    if (plist == NULL) {
-        return NULL;
-    }
-    plist->used = 0;
-    plist->max = STRING_LIST_INITIAL_MAX;
-    plist->size = 0;
-    plist->list = kmalloc(sizeof(char *) * (plist->max));
-    if (plist->list == NULL) {
-        kfree(plist);
-        return NULL;
-    }
-    return plist;
-}
-
-/*
- * De-allocates all memory associated with plist.
- */
-static void
-string_list_destroy(struct string_list *plist)
-{
-    KASSERT(plist != NULL);
-    for (int i = 0; i < plist->used; i++) {
-        kfree(plist->list[i]);
-    }
-    kfree(plist->list);
-    kfree(plist);
-}
-
-/*
- * Appends a new element at end of list.
- *
- * New memory is not allocated for the element.
- * The list directly references value which must
- * be kmalloc'd by the caller.
- *
- * Args:
- *   plist: Pointer to list to append to.
- *   new_string: Pointer to string to append.
- * 
- * Returns:
- *   index of element appended if successful else -1.\
- */
-static int 
-string_list_append(struct string_list *plist, char *new_string)
-{
-    char **new_list;
-    size_t new_max;
-    size_t string_size;
-
-    KASSERT(plist != NULL);
-    KASSERT(plist->used <= plist->max);
-    if (plist->used == plist->max) {
-        // Resize list size by doubling capactiy.
-        new_max = (plist->max) << 1;
-        if (new_max > STRING_LIST_MAX_MAX) {
-            return -1;
-        }
-        new_list = kmalloc(sizeof(char *) * new_max);
-        if (new_list == NULL) {
-            return -1;
-        }
-        memcpy(new_list, plist->list, (plist->used) * sizeof(char *));
-        kfree(plist->list);
-        plist->list = new_list;
-        plist->max = new_max;
-    }
-    plist->list[plist->used] = new_string;
-    // Update total bytes including null termination and string pointer.
-    // Handle value == NULL which signifies end of argv.
-    string_size = new_string ? strlen(new_string) + 1 : 0;
-    plist->size += sizeof(char) * string_size + sizeof(char *);
-    return plist->used++;
-}
+struct args_image {
+    int argc;  // Total number of args including progname.
+    size_t size;  // Total bytes: string pointers, chars, null terminations.
+    char **data;  // String pointers or chars.
+};
 
 /*
  * Copy args from user space to kernel space.
  *
+ * arg0\0arg1\0arg2\0\0
+ * NULL
+ * arg2_ptr  32b pointer
+ * arg1_ptr  32b pointer
+ * arg0_ptr  32b pointer <-- image->data
+ * 
  * Args:
  *   args: Array of strings, with last element NULL.
- *   arg_list: Return pointer for allocated list.
+ *   args_image: Return pointer to combined image of string pointers
+ *     and char data.
+ *   argc: Return pointer to number of non-NULL arguments.
+ *   args_size: Return pointer to number of total bytes used.
  * 
  * Returns:
  *   0 on success, else errno.
  */
 static int
-copyin_args(userptr_t args, struct string_list **arg_list) 
+copyin_args(userptr_t args, struct args_image *image)
 {
+    char **arg;  // Pointer to next argument to copy in.
+    char *dst;  // Kernel space destination for chars.
+    int nargs = 0;  // Number of arguments.
     size_t got;
-    userptr_t arg;  // User space string.
-    char *karg;  // Kernel space string (oversized)
-    char *karg_copy;  // Just sized copy.
     int result;
+    size_t bytes_avail;  // Bytes available before exceeding ARG_MAX.
+    //size_t bytes_allocated;  // Bytes currently allocated.
 
-    KASSERT(arg_list != NULL);
-    *arg_list = string_list_create();
-    if (*arg_list == NULL) {
+    //bytes_avail = ARG_MAX;
+    //bytes_allocated = ARG_INITIAL;
+    //image->data = kmalloc(bytes_allocated);
+    image->data = kmalloc(ARG_MAX);
+    if (image->data == NULL) {
         return ENOMEM;
     }
-    karg = kmalloc(ARG_SIZE);
-    if (karg == NULL) {
-        string_list_destroy(*arg_list);
-        return ENOMEM;
-    }
-    do {
-        if ((*arg_list)->size > ARG_MAX) {
-            kfree(karg);
-            string_list_destroy(*arg_list);
-            return E2BIG;
-        }
-        // Cannot directly use *args, so use copyin.
-        result = copyin(args, (void *)&arg, sizeof(arg));
+    // First pass: count number of args and fetch arg pointers into kernel space.
+    image->size = 0;  // Bytes consumed.
+    arg = (char **)args;
+    for (nargs = 0; nargs < ARGC_MAX; nargs++) {
+        result = copyin((userptr_t)arg, (void *)&image->data[nargs], sizeof(char *));
         if (result) {
-            kfree(karg);
-            string_list_destroy(*arg_list);
+            kfree(image->data);
             return result;
         }
-        if (arg == NULL) {
+        image->size += sizeof(char *);
+        if (image->data[nargs] == (char *)NULL) {
             break;
         }
-        result = copyinstr(arg, karg, ARG_SIZE, &got);
+        arg++;
+    }
+    if (nargs == ARGC_MAX) {
+        kfree(image->data);
+        return E2BIG;
+    }
+    image->argc = nargs;
+    dst = (char *)(image->data) + image->size;
+    // Second pass: fetch chars into kernel space.
+    for (int n = 0; n < nargs; n++) {
+        bytes_avail = ARG_MAX - image->size;
+        if (bytes_avail <= 0) {
+            kfree(image->data);
+            return E2BIG;
+        }
+        result = copyinstr((userptr_t)image->data[n], dst, bytes_avail, &got);
         if (result) {
-            kfree(karg);
-            string_list_destroy(*arg_list);
+            kfree(image->data);
             return result;
         }
-        if (got == ARG_SIZE) {
-            kfree(karg);
-            string_list_destroy(*arg_list);
-            return E2BIG;
-        }
-        // Downsize to just fit in memory.
-        karg_copy = kmalloc(got);
-        if (karg_copy == NULL) {
-            kfree(karg);
-            string_list_destroy(*arg_list);
-            return ENOMEM;
-        }
-        memcpy(karg_copy, karg, got);
-        result = string_list_append(*arg_list, karg_copy);
-        if (result < 0) {
-            kfree(karg);
-            string_list_destroy(*arg_list);
-            return E2BIG;
-        }
-        // args is userptr_t, so pointer arithmetic in bytes.
-        args += sizeof(char *);
-    } while (1);
-    kfree(karg);
-    // Include NULL pointer argv termination.
-    result = string_list_append(*arg_list, (char *)NULL);
-    if (result < 0) {
-        string_list_destroy(*arg_list);
-        return ENOMEM;
+        image->size += got;
+        image->data[n] = dst;
+        dst += got;
     }
     return 0;
 }
@@ -443,34 +354,34 @@ copyin_args(userptr_t args, struct string_list **arg_list)
  * used to set argv by the caller, for example.
  * 
  * Args:
- *   arg_list: Pointer to list of strings.
+ *   image: Pointer to image to copy. 
  *   stackptr: Highest address in user stack.
  * 
  * Returns:
  *   New stackptr (set below args copy).
  */ 
 static vaddr_t
-copyout_args(struct string_list *arg_list, vaddr_t stackptr)
+copyout_args(struct args_image image, vaddr_t stackptr)
 {
-    vaddr_t dst;  // Where next byte goes (user space).
-    char *src;  // Where next byte comes from (kernel space).
+    vaddr_t dst;  // Where next char goes (user space).
+    char *src;  // Where next char comes from (kernel space).
     size_t alignment = sizeof(char *) - 1;
     size_t aligned_size;
 
-    KASSERT(arg_list != NULL);
     KASSERT(stackptr != (vaddr_t)NULL);
-    aligned_size = (arg_list->size + alignment) & ~alignment; 
+    aligned_size = (image.size + alignment) & ~alignment; 
     stackptr -= aligned_size;
-    dst = stackptr + sizeof(char *) * arg_list->used;
+    // First char is stored just above the NULL argument.
+    dst = stackptr + sizeof(char *) * (image.argc + 1);
     
-    for (int i = 0; i < arg_list->used; i++) {
-        src = arg_list->list[i];
+    for (int n = 0; n < image.argc + 1; n++) {
+        src = image.data[n];
         if (src == NULL) {
-            ((char **)stackptr)[i] = (char *)NULL;
+            ((char **)stackptr)[n] = (char *)NULL;
             break;
         }
-        ((char **)stackptr)[i] = (char *)dst;
-        for (src = arg_list->list[i]; *src != '\0'; src++) {
+        ((char **)stackptr)[n] = (char *)dst;
+        for (src = image.data[n]; *src != '\0'; src++) {
             *(char *)dst++ = *src;
         }
         *(char *)(dst++) = '\0';
@@ -492,9 +403,8 @@ copyout_args(struct string_list *arg_list, vaddr_t stackptr)
 int sys_execv(userptr_t progname, userptr_t args)
 {
     char *kprogname;
-    struct string_list *arg_list;
+    struct args_image image;
     size_t got;
-    int argc;
     int result;
 	struct addrspace *as;
 	struct vnode *v;
@@ -502,27 +412,31 @@ int sys_execv(userptr_t progname, userptr_t args)
     userptr_t argv;
     struct addrspace *old_as;
 
-    // Temporarily store incoming args on heap so we don't overflow the kernel stack.
-    kprogname = kmalloc(ARG_SIZE);
+    kprogname = kmalloc(PROGNAME_MAX);
     if (kprogname == NULL) {
         return ENOMEM;
     }
-    result = copyinstr(progname, kprogname, ARG_SIZE, &got);
+    result = copyinstr(progname, kprogname, ARG_MAX, &got);
     if (result) {
         kfree(kprogname);
         return result;
     }
-    result = copyin_args(args, &arg_list);
+    if (got >= ARG_MAX) {
+        kfree(kprogname);
+        return E2BIG;
+    }    
+    result = copyin_args(args, &image);
     if (result) {
         kfree(kprogname);
         return result;
     }
+    KASSERT(image.argc > 0);
 
 	/* Open the file. */
 	result = vfs_open(kprogname, O_RDONLY, 0, &v);
     kfree(kprogname);
 	if (result) {
-        string_list_destroy(arg_list);
+        kfree(image.data);
 		return result;
 	}
     // TODO(aabo): check if file is executable?
@@ -531,7 +445,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	as = as_create();
 	if (as == NULL) {
 		vfs_close(v);
-        string_list_destroy(arg_list);
+		kfree(image.data);
 		return ENOMEM;
 	}
 
@@ -544,7 +458,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	result = load_elf(v, &entrypoint);
 	vfs_close(v);
 	if (result) {
-        string_list_destroy(arg_list);
+        kfree(image.data);
         proc_setas(old_as);
         as_activate();
         as_destroy(as);
@@ -554,7 +468,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	/* Define the user stack in the address space */
 	result = as_define_stack(as, &stackptr);
 	if (result) {
-        string_list_destroy(arg_list);
+        kfree(image.data);
         proc_setas(old_as);
         as_activate();
         as_destroy(as);     
@@ -563,13 +477,10 @@ int sys_execv(userptr_t progname, userptr_t args)
     // Point of no return. Discard previous address space.
     as_destroy(old_as);
 
-	stackptr = copyout_args(arg_list, stackptr);
+	stackptr = copyout_args(image, stackptr);
     argv = (userptr_t)stackptr;
-    // Don't count terminating NULL element in arg count.
-    argc = arg_list->used - 1;
-    KASSERT(argc > 0);
-    string_list_destroy(arg_list);
-	enter_new_process(argc, argv, NULL /*userspace addr of environment*/,
+    kfree(image.data);
+	enter_new_process(image.argc, argv, NULL /*userspace addr of environment*/,
 			  stackptr, entrypoint);
 
 	/* enter_new_process does not return. */
