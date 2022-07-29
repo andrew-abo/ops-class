@@ -19,13 +19,13 @@
 #include <vfs.h>
 
 // Initial number of max strings in list.
-#define string_list_INITIAL_MAX 16
+#define STRING_LIST_INITIAL_MAX 16
 
 // Max number of elements in pointer list after resizing.
-#define string_list_MAX_MAX 1024
+#define STRING_LIST_MAX_MAX 8192
 
 // Max chars per arg for execv.
-#define ARG_SIZE 1024
+#define ARG_SIZE 65534
 
 // An expandable array of strings.
 struct string_list {
@@ -274,7 +274,7 @@ static struct string_list
         return NULL;
     }
     plist->used = 0;
-    plist->max = string_list_INITIAL_MAX;
+    plist->max = STRING_LIST_INITIAL_MAX;
     plist->size = 0;
     plist->list = kmalloc(sizeof(char *) * (plist->max));
     if (plist->list == NULL) {
@@ -324,7 +324,7 @@ string_list_append(struct string_list *plist, char *new_string)
     if (plist->used == plist->max) {
         // Resize list size by doubling capactiy.
         new_max = (plist->max) << 1;
-        if (new_max > string_list_MAX_MAX) {
+        if (new_max > STRING_LIST_MAX_MAX) {
             return -1;
         }
         new_list = kmalloc(sizeof(char *) * new_max);
@@ -368,7 +368,6 @@ copyin_args(userptr_t args, struct string_list **arg_list)
     if (*arg_list == NULL) {
         return ENOMEM;
     }
-    // Temporarily store incoming args on heap so we don't overflow the stack.
     karg = kmalloc(ARG_SIZE);
     if (karg == NULL) {
         string_list_destroy(*arg_list);
@@ -401,6 +400,7 @@ copyin_args(userptr_t args, struct string_list **arg_list)
             string_list_destroy(*arg_list);
             return E2BIG;
         }
+        // Downsize to just fit in memory.
         karg_copy = kmalloc(got);
         if (karg_copy == NULL) {
             kfree(karg);
@@ -502,7 +502,7 @@ int sys_execv(userptr_t progname, userptr_t args)
     userptr_t argv;
     struct addrspace *old_as;
 
-    // Temporarily store incoming args on heap so we don't overflow the stack.
+    // Temporarily store incoming args on heap so we don't overflow the kernel stack.
     kprogname = kmalloc(ARG_SIZE);
     if (kprogname == NULL) {
         return ENOMEM;
@@ -517,7 +517,7 @@ int sys_execv(userptr_t progname, userptr_t args)
         kfree(kprogname);
         return result;
     }
-    
+
 	/* Open the file. */
 	result = vfs_open(kprogname, O_RDONLY, 0, &v);
     kfree(kprogname);
@@ -557,7 +557,7 @@ int sys_execv(userptr_t progname, userptr_t args)
         string_list_destroy(arg_list);
         proc_setas(old_as);
         as_activate();
-        as_destroy(as);        
+        as_destroy(as);     
 		return result;
 	}
     // Point of no return. Discard previous address space.
