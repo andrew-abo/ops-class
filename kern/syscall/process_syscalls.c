@@ -30,7 +30,7 @@
 
 // Initial size in bytes of args image for execv.
 // We dynamically adjust this upwards to ARG_MAX as needed.
-//#define ARG_INITIAL 1024
+#define ARG_INITIAL_SIZE 8192
 
 /*
  * Spawn a new process.
@@ -257,7 +257,8 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
 
 struct args_image {
     int argc;  // Total number of args including progname.
-    size_t size;  // Total bytes: string pointers, chars, null terminations.
+    size_t used;  // Total data used bytes: string pointers, chars, null terminations.
+    size_t size;  // Total data allocated bytes.
     char **data;  // String pointers or chars.
 };
 
@@ -272,7 +273,7 @@ struct args_image {
  * 
  * Args:
  *   args: Array of strings, with last element NULL.
- *   args_image: Return pointer to combined image of string pointers
+ *   args_image: Pre-allocated pointer to empty image of string pointers
  *     and char data.
  *   argc: Return pointer to number of non-NULL arguments.
  *   args_size: Return pointer to number of total bytes used.
@@ -288,50 +289,38 @@ copyin_args(userptr_t args, struct args_image *image)
     int nargs = 0;  // Number of arguments.
     size_t got;
     int result;
-    size_t bytes_avail;  // Bytes available before exceeding ARG_MAX.
-    //size_t bytes_allocated;  // Bytes currently allocated.
+    int bytes_avail;  // Bytes available before exceeding ARG_MAX.
 
-    //bytes_avail = ARG_MAX;
-    //bytes_allocated = ARG_INITIAL;
-    //image->data = kmalloc(bytes_allocated);
-    image->data = kmalloc(ARG_MAX);
-    if (image->data == NULL) {
-        return ENOMEM;
-    }
     // First pass: count number of args and fetch arg pointers into kernel space.
-    image->size = 0;  // Bytes consumed.
+    image->used = 0;  // Bytes consumed.
     arg = (char **)args;
     for (nargs = 0; nargs < ARGC_MAX; nargs++) {
         result = copyin((userptr_t)arg, (void *)&image->data[nargs], sizeof(char *));
         if (result) {
-            kfree(image->data);
             return result;
         }
-        image->size += sizeof(char *);
+        image->used += sizeof(char *);
         if (image->data[nargs] == (char *)NULL) {
             break;
         }
         arg++;
     }
     if (nargs == ARGC_MAX) {
-        kfree(image->data);
         return E2BIG;
     }
     image->argc = nargs;
-    dst = (char *)(image->data) + image->size;
+    dst = (char *)(image->data) + image->used;
     // Second pass: fetch chars into kernel space.
     for (int n = 0; n < nargs; n++) {
-        bytes_avail = ARG_MAX - image->size;
+        bytes_avail = image->size - image->used;
         if (bytes_avail <= 0) {
-            kfree(image->data);
             return E2BIG;
         }
         result = copyinstr((userptr_t)image->data[n], dst, bytes_avail, &got);
         if (result) {
-            kfree(image->data);
             return result;
         }
-        image->size += got;
+        image->used += got;
         image->data[n] = dst;
         dst += got;
     }
@@ -411,21 +400,47 @@ int sys_execv(userptr_t progname, userptr_t args)
 	vaddr_t entrypoint, stackptr;
     userptr_t argv;
     struct addrspace *old_as;
+    size_t data_size;
 
     kprogname = kmalloc(PROGNAME_MAX);
     if (kprogname == NULL) {
         return ENOMEM;
     }
-    result = copyinstr(progname, kprogname, ARG_MAX, &got);
+    result = copyinstr(progname, kprogname, PROGNAME_MAX, &got);
     if (result) {
         kfree(kprogname);
         return result;
     }
-    if (got >= ARG_MAX) {
+    if (got >= PROGNAME_MAX) {
         kfree(kprogname);
         return E2BIG;
-    }    
-    result = copyin_args(args, &image);
+    }
+
+    // To avoid a memory shortage when forking many processes at the same time,
+    // start data_size small and grow as needed.
+    data_size = ARG_INITIAL_SIZE;
+    do {
+        image.data = kmalloc(data_size);
+        if (image.data == NULL) {
+            kfree(kprogname);
+            return ENOMEM;
+        }
+        image.size = data_size;
+        result = copyin_args(args, &image);
+        if (result == 0) {
+            break;
+        }
+        kfree(image.data);
+        if ((result != E2BIG) && (result != ENAMETOOLONG)) {
+            kfree(kprogname);
+            return result;
+        }
+        data_size <<= 1;
+    } while (data_size <= ARG_MAX);
+    if (data_size > ARG_MAX) {
+        kfree(kprogname);
+        return E2BIG;
+    }
     if (result) {
         kfree(kprogname);
         return result;
