@@ -90,7 +90,7 @@ proctest2(int nargs, char **args)
 	return 0;
 }
 
-// Tests new PIDs can be generated and reclaimed.
+// Tests new PIDs can be generated.
 int
 proctest3(int nargs, char **args)
 {
@@ -99,18 +99,13 @@ proctest3(int nargs, char **args)
 	int i;
 	pid_t pid;
 
-	// Recycle a pid.
 	for (i = 0; i < 10; i++) {
         pid = new_pid();
 	}
-	prepend_pid_node(5, 1 /*enable_lock*/);
-	for (i = 0; i < PID_REFILL_LEVEL; i++) {
-        pid = new_pid();
-	}
-	KASSERT(pid == 5);
+	KASSERT(pid == 11);
 
 	// Exhaust pids.
-	for (i = 10 + PID_REFILL_LEVEL; i < PID_MAX; i++) {
+	for (i = 12; i <= PID_MAX; i++) {
 		pid = new_pid();
 	}
 	KASSERT(pid == PID_MAX);

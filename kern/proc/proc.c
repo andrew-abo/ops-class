@@ -439,110 +439,35 @@ proc_setas(struct addrspace *newas)
 // Next never used process ID.
 static pid_t next_pid = PID_MIN;
 
-// Number of pids on the free list.
-static int free_pids = 0;
-
-// Double-linked list of free pids.
-static struct pid_node *head = NULL;
-static struct pid_node *tail = NULL;
-
-struct pid_node {
-	pid_t pid;  // Free process ID.
-	struct pid_node *next;
-	struct pid_node *prev;
-};
-
-static struct lock *pid_list_lock;
-
-int
-prepend_pid_node(pid_t pid, int enable_lock) {
-	struct pid_node *new;
-
-	new = kmalloc(sizeof(struct pid_node));
-	if (new == NULL) {
-        return 1;
-	}
-	new->pid = pid;
-	new->prev = NULL;
-	
-	if (enable_lock) {
-        lock_acquire(pid_list_lock);
-	}
-	free_pids++;
-	if (head == NULL) {
-		head = new;
-		tail = new;
-		if (enable_lock) {
-            lock_release(pid_list_lock);
-		}
-		return 0;
-	}
-	new->next = head;
-	head->prev = new;
-	head = new;
-	if (enable_lock) {
-        lock_release(pid_list_lock);
-	}
-
-	return 0;
-}
+static struct lock *next_pid_lock;
 
 // Returns positive value if a new pid is available, else 0.
 pid_t 
 new_pid()
 {
-	int result;
 	pid_t pid;
-	struct pid_node *old_tail;
 
-	lock_acquire(pid_list_lock);
-    while (free_pids < PID_REFILL_LEVEL) {
-		if (next_pid > PID_MAX) {
-			break;
-		}
-		result = prepend_pid_node(next_pid++, 0);
-		if (result != 0) {
-			break;
-		}
-	}
-	if (tail == NULL) {
-		lock_release(pid_list_lock);
-		return 0;
-	}
-	old_tail = tail;
-	tail = tail->prev;
-	if (tail == NULL) {
-		head = NULL;
+	lock_acquire(next_pid_lock);
+	if (next_pid <= PID_MAX) {
+		pid = next_pid++;
 	} else {
-        tail->next = NULL;
+		pid = 0;
 	}
-	pid = old_tail->pid;
-	kfree(old_tail);
-	free_pids--;
-	lock_release(pid_list_lock);
+	lock_release(next_pid_lock);
     return pid;
 }
 
 void init_pid_list()
 {
-	pid_list_lock = lock_create("pid_list");
-	if (pid_list_lock == NULL) {
+	next_pid_lock = lock_create("pid_list");
+	if (next_pid_lock == NULL) {
 		panic("Could not initialize pid list.");
 	}
 }
 
 void teardown_pid_list()
 {
-    struct pid_node *p, *p_old;
-
-	for (p = head; p != NULL;) {
-        p_old = p;
-		p = p->next;
-		kfree(p_old);
-	}
-	head = NULL;
-	tail = NULL;
-	lock_destroy(pid_list_lock);
+	lock_destroy(next_pid_lock);
 }
 
 /*

@@ -241,7 +241,6 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
             return result;
         }
     }
-    prepend_pid_node(pid, 1 /*enable_lock*/);
     return 0;
 }
 
