@@ -141,4 +141,14 @@ void proclist_lock_acquire(void);
 void proclist_lock_release(void);
 void proclist_print(void);
 
+int prepend_pid_node(pid_t pid, int enable_lock);
+pid_t new_pid(void);
+void init_pid_list(void);
+void teardown_pid_list(void);
+
+// Refill list if less than this number.  Sets the minimum number of processes that
+// are spawned before the same PID can be recycled (when reaped).  Making this
+// number larger costs more memory.
+#define PID_REFILL_LEVEL 100
+
 #endif /* _PROC_H_ */

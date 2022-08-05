@@ -128,9 +128,7 @@ common_prog(int nargs, char **args)
 		return ENOMEM;
 	}
 	
-	proclist_lock_acquire();
 	result = proclist_insert(proc);
-	proclist_lock_release();
 
 	if (result) {
 		kprintf("common_prog: Failed proclist_insert.\n");
@@ -603,6 +601,7 @@ static const char *testmenu[] = {
 	"[tt4] Thread test 4                 ",
 	"[proc1] Process test 1              ",
 	"[proc2] Process test 2              ",
+	"[proc3] Process test 3              ",
 #if OPT_NET
 	"[net] Network test                  ",
 #endif
@@ -767,6 +766,7 @@ static struct {
 	/* process tests */
 	{ "proc1",  proctest1 },
 	{ "proc2",  proctest2 },
+	{ "proc3",  proctest3 },
 
 	/* synchronization assignment tests */
 	{ "sem1",	semtest },

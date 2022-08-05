@@ -80,19 +80,14 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     copy_file_descriptor_table(child, parent);
     lock_release(parent->files_lock);
 
-    proclist_lock_acquire();
+    child->pid = new_pid();
     proclist_insert(child);
-    proclist_lock_release();
 
     // Child returns via enter_forked_process().
     result = thread_fork("fork", child, enter_forked_process, (void *)tf_copy, 0);
     if (result) {
         kfree(tf_copy);
-
-        proclist_lock_acquire();
         proclist_remove(child->pid);
-        proclist_lock_release();
-
         for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
             fh = child->files[fd];
             child->files[fd] = NULL;
@@ -140,9 +135,7 @@ sys_exit_common(unsigned exit_status)
     proc->exit_status = exit_status;
     spinlock_release(&proc->p_lock);
     
-    proclist_lock_acquire();
     proclist_reparent(proc->pid);
-    proclist_lock_release();
 
     // Since we confirmed we're the only thread left in the process,
     // it's a bit of overkill to require locks from this point.
@@ -207,9 +200,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     if (options != 0) {
         return EINVAL;
     }
-    proclist_lock_acquire();
     child = proclist_lookup(pid);
-    proclist_lock_release();
 
     if (child == NULL) {
         return ESRCH;
@@ -239,11 +230,9 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     child_status = child->exit_status;
     spinlock_release(&child->p_lock);
 
-    proclist_lock_acquire();
     // TODO(aabo): Looking through the linked list above and here is
     // inefficient.  A doubly-linked list would eliminate need for two lookups.
-    child = proclist_remove(pid);
-    proclist_lock_release();
+    proclist_remove(pid);
 
     proc_destroy(child);
     if (status != NULL) {
@@ -252,6 +241,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
             return result;
         }
     }
+    prepend_pid_node(pid, 1 /*enable_lock*/);
     return 0;
 }
 
@@ -530,7 +520,5 @@ int sys_getpid(pid_t *pid)
 void
 sys___getlogin()
 {
-    proclist_lock_acquire();
     proclist_print();
-    proclist_lock_release();
 }

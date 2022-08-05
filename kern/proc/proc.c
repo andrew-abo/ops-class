@@ -222,11 +222,11 @@ proc_zombify(struct proc *proc)
         lock_destroy(proc->p_cwd_lock);
 		proc->p_cwd_lock = NULL;
 	}
-	spinlock_cleanup(&proc->p_lock);
 	if (proc->files_lock) {
 		lock_destroy(proc->files_lock);
 		proc->files_lock = NULL;
 	}
+	spinlock_cleanup(&proc->p_lock);
 }
 
 /*
@@ -434,8 +434,119 @@ proc_setas(struct addrspace *newas)
 	return oldas;
 }
 
+// TODO(aabo): Also somehow opening files causes a memory leak.
+
+// Next never used process ID.
+static pid_t next_pid = PID_MIN;
+
+// Number of pids on the free list.
+static int free_pids = 0;
+
+// Double-linked list of free pids.
+static struct pid_node *head = NULL;
+static struct pid_node *tail = NULL;
+
+struct pid_node {
+	pid_t pid;  // Free process ID.
+	struct pid_node *next;
+	struct pid_node *prev;
+};
+
+static struct lock *pid_list_lock;
+
+int
+prepend_pid_node(pid_t pid, int enable_lock) {
+	struct pid_node *new;
+
+	new = kmalloc(sizeof(struct pid_node));
+	if (new == NULL) {
+        return 1;
+	}
+	new->pid = pid;
+	new->prev = NULL;
+	
+	if (enable_lock) {
+        lock_acquire(pid_list_lock);
+	}
+	free_pids++;
+	if (head == NULL) {
+		head = new;
+		tail = new;
+		if (enable_lock) {
+            lock_release(pid_list_lock);
+		}
+		return 0;
+	}
+	new->next = head;
+	head->prev = new;
+	head = new;
+	if (enable_lock) {
+        lock_release(pid_list_lock);
+	}
+
+	return 0;
+}
+
+// Returns positive value if a new pid is available, else 0.
+pid_t 
+new_pid()
+{
+	int result;
+	pid_t pid;
+	struct pid_node *old_tail;
+
+	lock_acquire(pid_list_lock);
+    while (free_pids < PID_REFILL_LEVEL) {
+		if (next_pid > PID_MAX) {
+			break;
+		}
+		result = prepend_pid_node(next_pid++, 0);
+		if (result != 0) {
+			break;
+		}
+	}
+	if (tail == NULL) {
+		lock_release(pid_list_lock);
+		return 0;
+	}
+	old_tail = tail;
+	tail = tail->prev;
+	if (tail == NULL) {
+		head = NULL;
+	} else {
+        tail->next = NULL;
+	}
+	pid = old_tail->pid;
+	kfree(old_tail);
+	free_pids--;
+	lock_release(pid_list_lock);
+    return pid;
+}
+
+void init_pid_list()
+{
+	pid_list_lock = lock_create("pid_list");
+	if (pid_list_lock == NULL) {
+		panic("Could not initialize pid list.");
+	}
+}
+
+void teardown_pid_list()
+{
+    struct pid_node *p, *p_old;
+
+	for (p = head; p != NULL;) {
+        p_old = p;
+		p = p->next;
+		kfree(p_old);
+	}
+	head = NULL;
+	tail = NULL;
+	lock_destroy(pid_list_lock);
+}
+
 /*
- * Insert newproc into proclist sorted by pid.
+ * Insert newproc into proclist (unsorted).
  *
  * Args:
  *   newproc: Pointer to new process to insert.
@@ -446,38 +557,11 @@ proc_setas(struct addrspace *newas)
 int
 proclist_insert(struct proc *newproc)
 {
-    struct proc *p;
-	struct proc *prev;
-
 	KASSERT(newproc != NULL);
-	prev = NULL;
-	for (p = proclist; p != NULL; p = p->next) {
-		if (p->pid == PID_MAX) {
-			return EMPROC;
-		}
-		if (prev != NULL) {
-            KASSERT(p->pid > prev->pid);
-            if (p->pid - prev->pid > 1) {
-                newproc->pid = prev->pid + 1;
-				spinlock_acquire(&prev->p_lock);
-                prev->next = newproc;
-				spinlock_release(&prev->p_lock);
-                newproc->next = p;
-                return 0;
-            }
-		}
-		prev = p;
-	}
-	newproc->next = NULL;	
-	if (prev == NULL) {
-		newproc->pid = 1;
-		proclist = newproc;
-		return 0;
-	}
-	spinlock_acquire(&prev->p_lock);
-	prev->next = newproc;	
-	newproc->pid = (prev->pid) + 1;
-	spinlock_release(&prev->p_lock);
+	proclist_lock_acquire();
+	newproc->next = proclist;
+	proclist = newproc;
+	proclist_lock_release();
 	return 0;
 }
 
@@ -498,20 +582,22 @@ struct proc *proclist_remove(pid_t pid)
 	struct proc *prev;
 
 	KASSERT((pid >= 1) && (pid <= PID_MAX));
+	proclist_lock_acquire();
 	prev = NULL;
 	for (p = proclist; p != NULL; p = p->next) {
 		if (p->pid == pid) {
             if (prev == NULL) {
 				proclist = p->next;
+				proclist_lock_release();
 				return p;
 			}
-			spinlock_acquire(&prev->p_lock);
 			prev->next = p->next;
-			spinlock_release(&prev->p_lock);
+			proclist_lock_release();
 			return p;
 		}
 		prev = p;
 	}
+	proclist_lock_release();
 	return NULL;
 }
 
@@ -554,22 +640,26 @@ void proclist_lock_release()
  */
 void proclist_reparent(pid_t pid)
 {
-	struct proc *p;
+	struct proc *p, *prev;
 
-	for (p = proclist; p != NULL; p = p->next) {
+	proclist_lock_acquire();
+	for (p = proclist; p != NULL;) {
 		spinlock_acquire(&p->p_lock);
 		if (p->ppid == pid) {
 			p->ppid = 1;
 		}
-		spinlock_release(&p->p_lock);
+		prev = p;
+		p = p->next;
+		spinlock_release(&prev->p_lock);
 	}
+	proclist_lock_release();
 }
 
 /*
  * Returns proc from proclist matching pid.
  *
  * Args:
- *   pid: Process ID to find.
+ *   pid: Process ID to find.b
  * 
  * Returns:
  *   Pointer to proc matching pid, else NULL.
@@ -579,11 +669,14 @@ struct proc
 {
     struct proc *p;
 
-	for (p = proclist; p != NULL; p = p->next) {
+    proclist_lock_acquire();
+	for (p = proclist; p != NULL; p = p->next) { 
 		if (p->pid == pid) {
+			proclist_lock_release();
 			return p;
 		}
 	}
+	proclist_lock_release();
 	return NULL;
 }
 
@@ -601,6 +694,7 @@ proclist_print()
 	char s_unknown[] = "UNKNOWN";
 	char *state;
 
+	proclist_lock_acquire();
 	kprintf("%6s %6s %30s %10s\n", "PID", "PPID", "NAME", "STATE");
 	for (p = proclist; p != NULL; p = p->next) {
 		switch (p->p_state) {
@@ -626,4 +720,5 @@ proclist_print()
         }
 		kprintf("%6d %6d %30s %10s\n", p->pid, p->ppid, p->p_name, state);
 	}
+	proclist_lock_release();
 }

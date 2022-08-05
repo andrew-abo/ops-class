@@ -14,6 +14,8 @@
 
 #define CREATELOOPS 4
 #define NEWPROCS 5
+#define N_PID 120
+
 
 // Tests proc objects can be created and destroyed.
 int
@@ -85,5 +87,38 @@ proctest2(int nargs, char **args)
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "proc2");
 
+	return 0;
+}
+
+// Tests new PIDs can be generated and reclaimed.
+int
+proctest3(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+	int i;
+	pid_t pid;
+
+	// Recycle a pid.
+	for (i = 0; i < 10; i++) {
+        pid = new_pid();
+	}
+	prepend_pid_node(5, 1 /*enable_lock*/);
+	for (i = 0; i < PID_REFILL_LEVEL; i++) {
+        pid = new_pid();
+	}
+	KASSERT(pid == 5);
+
+	// Exhaust pids.
+	for (i = 10 + PID_REFILL_LEVEL; i < PID_MAX; i++) {
+		pid = new_pid();
+	}
+	KASSERT(pid == PID_MAX);
+
+	// No more PIDs left.
+	pid = new_pid();
+	KASSERT(pid == 0);
+
+	success(TEST161_SUCCESS, SECRET, "proc3");
 	return 0;
 }

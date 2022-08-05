@@ -188,6 +188,7 @@ boot(void)
 	
 	init_console();
 	proclist_init();
+	init_pid_list();
 }
 
 /*
@@ -207,6 +208,7 @@ shutdown(void)
 	thread_shutdown();
 	tear_down_console();
 	proclist_teardown();
+	teardown_pid_list();
 
 	splhigh();
 }
