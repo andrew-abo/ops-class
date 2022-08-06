@@ -55,6 +55,7 @@ static char filename[32];
  */
 static volatile int mypid;
 
+/*
 // Debugging aid.
 // Since stdout is mixed, we can use files as separate
 // outputs per process.  You need to remove all the files
@@ -72,7 +73,7 @@ static void pidprint(pid_t pid, char *msg)
 	write(fd, msg, strlen(msg));
 	close(fd);
 }
-
+*/
 
 /*
  * Helper function to do pow()
@@ -158,7 +159,7 @@ dowait(int nowait, int pid)
 
 	if (!nowait) {
 		snprintf(msg, sizeof(msg), "waitpid(%d)\n", pid);
-		pidprint(mypid, msg);
+		//pidprint(mypid, msg);
 		if (waitpid(pid, &x, 0)<0) {
 			errx(1, "waitpid errorno = %d", errno);
 		}
