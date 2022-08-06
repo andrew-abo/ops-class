@@ -434,8 +434,6 @@ proc_setas(struct addrspace *newas)
 	return oldas;
 }
 
-// TODO(aabo): Also somehow opening files causes a memory leak.
-
 // Next never used process ID.
 static pid_t next_pid = PID_MIN;
 
