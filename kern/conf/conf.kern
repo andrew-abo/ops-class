@@ -352,6 +352,8 @@ file      vm/kmalloc.c
 
 optofffile dumbvm   vm/addrspace.c
 
+file      arch/mips/vm/vm.c
+
 #
 # Network
 # (nothing here yet)
