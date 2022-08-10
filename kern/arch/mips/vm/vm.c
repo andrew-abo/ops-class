@@ -39,30 +39,57 @@
 #include <addrspace.h>
 #include <vm.h>
 
+static struct spinlock coremap_lock;
+static paddr_t firstpaddr;  // First byte that can be allocated.
+static paddr_t lastpaddr;   // Last byte that can be allocated.
+static struct core_page *coremap;
+static unsigned used_bytes;
+static unsigned page_max;
+
 /*
- * Dumb MIPS-only "VM system" that is intended to only be just barely
- * enough to struggle off the ground. You should replace all of this
- * code while doing the VM assignment. In fact, starting in that
- * assignment, this file is not included in your kernel!
+static unsigned core_npages(struct core_page page)
+{
+    return (page.status) & VM_CORE_NPAGES;
+}
+
+static unsigned set_core_status(int used, int accessed, int dirty, unsigned npages)
+{
+    return (used ? VM_CORE_USED : 0) | 
+           (accessed ? VM_CORE_ACCESSED : 0) | 
+           (dirty ? VM_CORE_DIRTY : 0) |
+           (npages & VM_CORE_NPAGES);
+}
+*/
+
+/*
+ * Initializes the physical to virtual memory map.
  *
- * NOTE: it's been found over the years that students often begin on
- * the VM assignment by copying dumbvm.c and trying to improve it.
- * This is not recommended. dumbvm is (more or less intentionally) not
- * a good design reference. The first recommendation would be: do not
- * look at dumbvm at all. The second recommendation would be: if you
- * do, be sure to review it from the perspective of comparing it to
- * what a VM system is supposed to do, and understanding what corners
- * it's cutting (there are many) and why, and more importantly, how.
+ * Must be run after ram_bootstrap() and before kmalloc().
+ * will function.
  */
+void
+vm_init_coremap()
+{
+	size_t raw_bytes;
+	size_t avail_bytes;
+	size_t coremap_bytes;
+	paddr_t firstfree;
 
-/* under dumbvm, always have 72k of user stack */
-/* (this must be > 64K so argument blocks of size ARG_MAX will fit) */
-#define DUMBVM_STACKPAGES    18
+	lastpaddr = ram_getsize();
+	firstfree = ram_getfirstfree();
+	used_bytes = 0;
+	raw_bytes = lastpaddr - firstfree;
+	avail_bytes = raw_bytes / (1 + (float)sizeof(struct core_page) / PAGE_SIZE);
+	page_max = avail_bytes / PAGE_SIZE;
+	coremap_bytes = page_max * sizeof(struct core_page);
 
-/*
- * Wrap ram_stealmem in a spinlock.
- */
-static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+	coremap = (struct core_page *)firstfree;
+	kprintf("coremap = %p\n", coremap);
+	kprintf("coremap_top = %p\n", (char *)coremap + coremap_bytes);
+	kprintf("lastpaddr = %p\n", (void *)lastpaddr);
+    spinlock_init(&coremap_lock);
+	(void)firstpaddr;
+}
 
 void
 vm_bootstrap(void)
@@ -70,51 +97,13 @@ vm_bootstrap(void)
 	/* Do nothing. */
 }
 
-/*
- * Check if we're in a context that can sleep. While most of the
- * operations in dumbvm don't in fact sleep, in a real VM system many
- * of them would. In those, assert that sleeping is ok. This helps
- * avoid the situation where syscall-layer code that works ok with
- * dumbvm starts blowing up during the VM assignment.
- */
-static
-void
-dumbvm_can_sleep(void)
-{
-	if (CURCPU_EXISTS()) {
-		/* must not hold spinlocks */
-		KASSERT(curcpu->c_spinlocks == 0);
-
-		/* must not be in an interrupt handler */
-		KASSERT(curthread->t_in_interrupt == 0);
-	}
-}
-
-static
-paddr_t
-getppages(unsigned long npages)
-{
-	paddr_t addr;
-
-	spinlock_acquire(&stealmem_lock);
-
-	addr = ram_stealmem(npages);
-
-	spinlock_release(&stealmem_lock);
-	return addr;
-}
-
 /* Allocate/free some kernel-space virtual pages */
 vaddr_t
 alloc_kpages(unsigned npages)
 {
-	paddr_t pa;
+	(void)npages;
+	paddr_t pa = 0;
 
-	dumbvm_can_sleep();
-	pa = getppages(npages);
-	if (pa==0) {
-		return 0;
-	}
 	return PADDR_TO_KVADDR(pa);
 }
 
@@ -145,7 +134,6 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
-	vaddr_t vbase1, vtop1, vbase2, vtop2, stackbase, stacktop;
 	paddr_t paddr;
 	int i;
 	uint32_t ehi, elo;
@@ -158,8 +146,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
-		/* We always create pages read-write, so we can't get this */
-		panic("dumbvm: got VM_FAULT_READONLY\n");
 	    case VM_FAULT_READ:
 	    case VM_FAULT_WRITE:
 		break;
@@ -186,38 +172,16 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	}
 
 	/* Assert that the address space has been set up properly. */
-	KASSERT(as->as_vbase1 != 0);
-	KASSERT(as->as_pbase1 != 0);
-	KASSERT(as->as_npages1 != 0);
-	KASSERT(as->as_vbase2 != 0);
-	KASSERT(as->as_pbase2 != 0);
-	KASSERT(as->as_npages2 != 0);
-	KASSERT(as->as_stackpbase != 0);
-	KASSERT((as->as_vbase1 & PAGE_FRAME) == as->as_vbase1);
-	KASSERT((as->as_pbase1 & PAGE_FRAME) == as->as_pbase1);
-	KASSERT((as->as_vbase2 & PAGE_FRAME) == as->as_vbase2);
-	KASSERT((as->as_pbase2 & PAGE_FRAME) == as->as_pbase2);
-	KASSERT((as->as_stackpbase & PAGE_FRAME) == as->as_stackpbase);
+	//KASSERT(as->as_vbase1 != 0);
 
-	vbase1 = as->as_vbase1;
-	vtop1 = vbase1 + as->as_npages1 * PAGE_SIZE;
-	vbase2 = as->as_vbase2;
-	vtop2 = vbase2 + as->as_npages2 * PAGE_SIZE;
-	stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
-	stacktop = USERSTACK;
+	// Check address is in valid defined region.
+	//vbase1 = as->as_vbase1;
+	//vtop1 = vbase1 + as->as_npages1 * PAGE_SIZE;
+	//stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
+	//stacktop = USERSTACK;
 
-	if (faultaddress >= vbase1 && faultaddress < vtop1) {
-		paddr = (faultaddress - vbase1) + as->as_pbase1;
-	}
-	else if (faultaddress >= vbase2 && faultaddress < vtop2) {
-		paddr = (faultaddress - vbase2) + as->as_pbase2;
-	}
-	else if (faultaddress >= stackbase && faultaddress < stacktop) {
-		paddr = (faultaddress - stackbase) + as->as_stackpbase;
-	}
-	else {
-		return EFAULT;
-	}
+	// If invalid return EFAULT.
+	paddr = 0;
 
 	/* make sure it's page-aligned */
 	KASSERT((paddr & PAGE_FRAME) == paddr);

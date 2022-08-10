@@ -44,8 +44,22 @@
 #define VM_FAULT_WRITE       1    /* A write was attempted */
 #define VM_FAULT_READONLY    2    /* A write to a readonly page was attempted*/
 
+// Bit masks for core_page status.
+#define VM_CORE_USED 0x10000  // Page is allocated and in use.
+#define VM_CORE_ACCESSED 0x20000  // Page has been accessed since last eviction sweep.
+#define VM_CORE_DIRTY 0x40000  // Page in memory differs from page on disk.
+#define VM_CORE_NPAGES 0xffff  // Mask for number of contiguous pages in this allocation
+                            // starting at current index.
 
-/* Initialization function */
+struct core_page {
+    unsigned status;  // See bit masks above.
+    vaddr_t vaddr;    // Virtual address where this page starts.
+    struct as *as;    // Pointer to address space this page belongs to.
+};
+
+// Initializes physical memory map to enable kmalloc.
+void vm_init_coremap(void);
+
 void vm_bootstrap(void);
 
 /* Fault handling function called by trap code */

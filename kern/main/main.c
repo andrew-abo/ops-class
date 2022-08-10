@@ -153,6 +153,7 @@ boot(void)
 
 	/* Early initialization. */
 	ram_bootstrap();
+	vm_init_coremap();
 	proc_bootstrap();
 	thread_bootstrap();
 	hardclock_bootstrap();

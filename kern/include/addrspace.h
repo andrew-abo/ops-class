@@ -48,6 +48,14 @@ struct vnode;
  * You write this.
  */
 
+#define SEGMENT_MAX 5  // Memory segments per process.
+#define USER_STACKPAGES  // Max of user stack in pages.
+
+struct segment {
+    vaddr_t vbase;
+    unsigned npages;
+};
+
 struct addrspace {
 #if OPT_DUMBVM
         vaddr_t as_vbase1;
@@ -58,15 +66,8 @@ struct addrspace {
         size_t as_npages2;
         paddr_t as_stackpbase;
 #else
-        /* Put stuff here for your VM system */
-        // TODO(aabo): Delete obsolete DUMBVM stuff.
-        vaddr_t as_vbase1;
-        paddr_t as_pbase1;
-        size_t as_npages1;
-        vaddr_t as_vbase2;
-        paddr_t as_pbase2;
-        size_t as_npages2;
-        paddr_t as_stackpbase;
+        struct segment segments[SEGMENT_MAX];
+
 #endif
 };
 
