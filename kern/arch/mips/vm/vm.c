@@ -43,11 +43,9 @@ static struct spinlock coremap_lock;
 
 static paddr_t firstpaddr;  // First byte that can be allocated.
 static paddr_t lastpaddr;   // Last byte that can be allocated.
-/*
 static struct core_page *coremap;
 static unsigned used_bytes;
 static unsigned page_max;
-*/
 
 /*
 static unsigned core_npages(struct core_page page)
@@ -73,35 +71,41 @@ static unsigned set_core_status(int used, int accessed, int dirty, unsigned npag
 void
 vm_init_coremap()
 {
-	/*
 	size_t raw_bytes;
 	size_t avail_bytes;
 	size_t coremap_bytes;
-	*/
 	paddr_t firstfree;
 
 	lastpaddr = ram_getsize();
 	firstfree = ram_getfirstfree();
 	firstpaddr = firstfree;
 
-	/*
 	used_bytes = 0;
 
 	// Total memory in bytes minus the kernel code.
 	raw_bytes = lastpaddr - firstfree;
 
 	// Total bytes available after allocating the coremap and possible alignment.
-	avail_bytes = raw_bytes /  (1 + (float)sizeof(struct core_page) / PAGE_SIZE);
-	avail_bytes -= sizeof(struct core_page);
+	// TODO(aabo): This expression seems to make kernel hang.  Div by zero exception?
+	//avail_bytes = raw_bytes /  (1 + (float)sizeof(struct core_page) / PAGE_SIZE);
+	avail_bytes = 1.0 * raw_bytes * PAGE_SIZE / (PAGE_SIZE + sizeof(struct core_page));
+	//avail_bytes -= sizeof(struct core_page);
+	//avail_bytes = raw_bytes;
 
 	page_max = avail_bytes / PAGE_SIZE;
 	coremap_bytes = page_max * sizeof(struct core_page);
 
 	// &coremap[0] aligned up to core_page size.
+	
 	coremap = (struct core_page *)((firstfree + sizeof(struct core_page) - 1) & 
 	          ~(sizeof(struct core_page) - 1));
+	// TODO(aabo): bzero appears to hang kernel.
 	bzero((void *)coremap, coremap_bytes);
+	(void)coremap_bytes;
+	(void)coremap;
 
+	kprintf("avail_bytes = %u\n", avail_bytes);
+	/*
 	// First allocatable page is above coremap and page aligned up.
 	firstpaddr = (paddr_t)((char *)coremap + coremap_bytes);
 	firstpaddr = (firstpaddr + PAGE_SIZE - 1) & PAGE_FRAME;
