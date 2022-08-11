@@ -40,11 +40,14 @@
 #include <vm.h>
 
 static struct spinlock coremap_lock;
+
 static paddr_t firstpaddr;  // First byte that can be allocated.
 static paddr_t lastpaddr;   // Last byte that can be allocated.
+/*
 static struct core_page *coremap;
 static unsigned used_bytes;
 static unsigned page_max;
+*/
 
 /*
 static unsigned core_npages(struct core_page page)
@@ -70,25 +73,41 @@ static unsigned set_core_status(int used, int accessed, int dirty, unsigned npag
 void
 vm_init_coremap()
 {
+	/*
 	size_t raw_bytes;
 	size_t avail_bytes;
 	size_t coremap_bytes;
+	*/
 	paddr_t firstfree;
 
 	lastpaddr = ram_getsize();
 	firstfree = ram_getfirstfree();
+	firstpaddr = firstfree;
+
+	/*
 	used_bytes = 0;
+
+	// Total memory in bytes minus the kernel code.
 	raw_bytes = lastpaddr - firstfree;
-	avail_bytes = raw_bytes / (1 + (float)sizeof(struct core_page) / PAGE_SIZE);
+
+	// Total bytes available after allocating the coremap and possible alignment.
+	avail_bytes = raw_bytes /  (1 + (float)sizeof(struct core_page) / PAGE_SIZE);
+	avail_bytes -= sizeof(struct core_page);
+
 	page_max = avail_bytes / PAGE_SIZE;
 	coremap_bytes = page_max * sizeof(struct core_page);
 
-	coremap = (struct core_page *)firstfree;
-	kprintf("coremap = %p\n", coremap);
-	kprintf("coremap_top = %p\n", (char *)coremap + coremap_bytes);
-	kprintf("lastpaddr = %p\n", (void *)lastpaddr);
-    spinlock_init(&coremap_lock);
-	(void)firstpaddr;
+	// &coremap[0] aligned up to core_page size.
+	coremap = (struct core_page *)((firstfree + sizeof(struct core_page) - 1) & 
+	          ~(sizeof(struct core_page) - 1));
+	bzero((void *)coremap, coremap_bytes);
+
+	// First allocatable page is above coremap and page aligned up.
+	firstpaddr = (paddr_t)((char *)coremap + coremap_bytes);
+	firstpaddr = (firstpaddr + PAGE_SIZE - 1) & PAGE_FRAME;
+	*/
+
+	spinlock_init(&coremap_lock);
 }
 
 void
@@ -101,9 +120,14 @@ vm_bootstrap(void)
 vaddr_t
 alloc_kpages(unsigned npages)
 {
-	(void)npages;
-	paddr_t pa = 0;
+	paddr_t pa;
 
+	// Temporary hack: allocate from bottom with no freeing.
+	spinlock_acquire(&coremap_lock);
+	KASSERT((firstpaddr & PAGE_FRAME) == firstpaddr);
+	pa = firstpaddr;
+	firstpaddr += npages * PAGE_SIZE;
+	spinlock_release(&coremap_lock);
 	return PADDR_TO_KVADDR(pa);
 }
 
