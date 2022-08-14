@@ -74,43 +74,44 @@ vm_init_coremap()
 	size_t raw_bytes;
 	size_t avail_bytes;
 	size_t coremap_bytes;
+	unsigned raw_pages;
 	paddr_t firstfree;
+	paddr_t coremap_paddr;
 
 	lastpaddr = ram_getsize();
-	firstfree = ram_getfirstfree();
-	firstpaddr = firstfree;
 
+	// First available physical address just above kernel image 
+	// and first thread stack.
+	firstfree = ram_getfirstfree();
 	used_bytes = 0;
 
 	// Total memory in bytes minus the kernel code.
 	raw_bytes = lastpaddr - firstfree;
-
-	// Total bytes available after allocating the coremap and possible alignment.
-	// TODO(aabo): This expression seems to make kernel hang.  Div by zero exception?
-	//avail_bytes = raw_bytes /  (1 + (float)sizeof(struct core_page) / PAGE_SIZE);
-	avail_bytes = 1.0 * raw_bytes * PAGE_SIZE / (PAGE_SIZE + sizeof(struct core_page));
-	//avail_bytes -= sizeof(struct core_page);
-	//avail_bytes = raw_bytes;
-
+	raw_pages = raw_bytes / PAGE_SIZE;
+	coremap_bytes = raw_pages * sizeof(struct core_page);
+	avail_bytes = raw_bytes - coremap_bytes;
 	page_max = avail_bytes / PAGE_SIZE;
-	coremap_bytes = page_max * sizeof(struct core_page);
 
-	// &coremap[0] aligned up to core_page size.
-	
-	coremap = (struct core_page *)((firstfree + sizeof(struct core_page) - 1) & 
-	          ~(sizeof(struct core_page) - 1));
-	// TODO(aabo): bzero appears to hang kernel.
-	bzero((void *)coremap, coremap_bytes);
-	(void)coremap_bytes;
-	(void)coremap;
+	// &coremap[0] aligned up to core_page size.	
+	coremap_paddr = (firstfree + sizeof(struct core_page) - 1) & 
+	    ~(sizeof(struct core_page) - 1);
 
-	kprintf("avail_bytes = %u\n", avail_bytes);
-	/*
 	// First allocatable page is above coremap and page aligned up.
-	firstpaddr = (paddr_t)((char *)coremap + coremap_bytes);
+	firstpaddr = coremap_paddr + coremap_bytes;
 	firstpaddr = (firstpaddr + PAGE_SIZE - 1) & PAGE_FRAME;
-	*/
 
+	kprintf("\nvm_init_coremap\n");
+	kprintf("lastpaddr  = 0x%07x\n", lastpaddr);
+	kprintf("firstpaddr = 0x%07x\n", firstpaddr);
+	kprintf("coremap    = 0x%07x\n", coremap_paddr);
+	kprintf("coremap_bytes = %u\n", coremap_bytes);
+	kprintf("last - first = %u\n", lastpaddr - firstpaddr);
+	kprintf("\n");
+
+	// From this point, we will be accessing coremap directly, so
+	// convert to a virtual address and clear the coremap.
+	coremap = (struct core_page *)PADDR_TO_KVADDR(coremap_paddr);
+	bzero((void *)coremap, coremap_bytes);
 	spinlock_init(&coremap_lock);
 }
 
