@@ -85,7 +85,18 @@ validate_coremap()
 		}
 		p += npages;
 	}
+	if (used_pages * PAGE_SIZE != used_bytes) {
+		kprintf("used_pages = %u\n", used_pages);
+		kprintf("used_bytes = %u\n", used_bytes);
+		panic("used_pages * PAGE_SIZE != used_bytes");
+	}
 	KASSERT(used_pages * PAGE_SIZE == used_bytes);
+	if (used_pages + free_pages != page_max) {
+		kprintf("used_pages = %u\n", used_pages);
+		kprintf("free_pages = %u\n", free_pages);
+		kprintf("page_max = %u\n", page_max);
+		panic("used_pages + free_pages != page_max");
+	}
 	KASSERT(used_pages + free_pages == page_max);
 }
 
@@ -133,6 +144,7 @@ vm_init_coremap()
 	kprintf("coremap    = 0x%07x\n", coremap_paddr);
 	kprintf("coremap_bytes = %u\n", coremap_bytes);
 	kprintf("last - first = %u\n", lastpaddr - firstpaddr);
+	kprintf("page_max = %u\n", page_max);
 	kprintf("\n");
 
 	// From this point, we will be accessing coremap directly, so
@@ -176,21 +188,24 @@ alloc_kpages(unsigned npages)
 	spinlock_acquire(&coremap_lock);
 	p = next_fit;
 	KASSERT(p < page_max);
-	do {
-		block_pages = get_core_npages(p);
-        if (!(coremap[p].status & VM_CORE_USED) && (block_pages >= npages)) {
-			break;
-		}
+	//kprintf("alloc_kpages(%u)\n", npages);
+	block_pages = get_core_npages(p);
+	while ((coremap[p].status & VM_CORE_USED) || (block_pages < npages)) {
+		//kprintf("scanning p = %u\n", p);
 		p = (p + block_pages) % page_max;
-	} while (p != next_fit);
-	if (block_pages < npages) {
-		spinlock_release(&coremap_lock);
-		return 0;
+		if (p == next_fit) {
+            spinlock_release(&coremap_lock);
+            panic("out of memory");
+            return 0;
+		}
+		block_pages = get_core_npages(p);
 	}
 	paddr = firstpaddr + p * PAGE_SIZE;
 	KASSERT((paddr & PAGE_FRAME) == paddr);
 	KASSERT(paddr >= firstpaddr);  // Don't overwrite kernel.
 	vaddr = PADDR_TO_KVADDR(paddr);
+	// TODO(aabo): Defer zero filling until pages are accessed in fault handler.
+	bzero((void *)vaddr, npages * PAGE_SIZE);
 	coremap[p].vaddr = vaddr;
 	coremap[p].status = set_core_status(1, 0, 0, npages);
 	coremap[p].as = NULL;
@@ -203,15 +218,23 @@ alloc_kpages(unsigned npages)
 	used_bytes += npages * PAGE_SIZE;
 	validate_coremap();
 	spinlock_release(&coremap_lock);
+	kprintf("alloc_kpages() -> 0x%x\n", vaddr);
 	return vaddr;
 }
 
 void
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+    unsigned page_idx;
 
-	(void)addr;
+    KASSERT((addr & PAGE_FRAME) == addr);
+	page_idx = KVADDR_TO_PADDR(addr) >> PAGE_SIZE_MSB;
+	spinlock_acquire(&coremap_lock);
+	kprintf("free_kpages(0x%x) 0x%x\n", addr, coremap[page_idx].status);
+	// TODO(aabo): This assertion fails on km2.
+	KASSERT(coremap[page_idx].status & VM_CORE_USED);
+	coremap[page_idx].status &= ~VM_CORE_USED;
+	spinlock_release(&coremap_lock);
 }
 
 unsigned

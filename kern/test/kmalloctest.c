@@ -62,7 +62,8 @@ extern vaddr_t firstfree;
 
 #define NTRIES   1200
 #define ITEMSIZE  997
-#define NTHREADS  8
+//#define NTHREADS  8
+#define NTHREADS  1
 
 #define PROGRESS(iter) do { \
 	if ((iter % 100) == 0) { \
@@ -337,10 +338,12 @@ kmalloctest4thread(void *sm, unsigned long num)
 	for (i=0; i<NTRIES; i++) {
 		PROGRESS(i);
 		if (ptrs[q] != NULL) {
+			kprintf("kfree(%p)\n", ptrs[q]);
 			kfree(ptrs[q]);
 			ptrs[q] = NULL;
 		}
 		ptrs[p] = kmalloc(sizes[p] * PAGE_SIZE);
+		kprintf("kmalloc() -> %p\n", ptrs[p]);
 		if (ptrs[p] == NULL) {
 			panic("kmalloctest4: thread %lu: "
 			      "allocating %u pages failed\n",
