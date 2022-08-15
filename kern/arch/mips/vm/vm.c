@@ -41,16 +41,18 @@
 
 static struct spinlock coremap_lock;
 
+// Acquire coremap_lock before accessing any of these shared variables.
 static paddr_t firstpaddr;  // First byte that can be allocated.
 static paddr_t lastpaddr;   // Last byte that can be allocated.
 static struct core_page *coremap;
 static unsigned used_bytes;
-static unsigned page_max;
+static unsigned page_max;  // Total number of allocatable pages.
+static unsigned next_fit;  // Coremap index to resume free page search.
 
-/*
-static unsigned core_npages(struct core_page page)
+static unsigned get_core_npages(unsigned page_index)
 {
-    return (page.status) & VM_CORE_NPAGES;
+	//KASSERT(spinlock_do_i_hold(&coremap_lock));
+    return (coremap[page_index].status) & VM_CORE_NPAGES;
 }
 
 static unsigned set_core_status(int used, int accessed, int dirty, unsigned npages)
@@ -60,7 +62,36 @@ static unsigned set_core_status(int used, int accessed, int dirty, unsigned npag
            (dirty ? VM_CORE_DIRTY : 0) |
            (npages & VM_CORE_NPAGES);
 }
-*/
+
+/*
+ * Debug check to confirm coremap is valid.
+ * Caller is responsible for locking coremap.
+ */
+static void
+validate_coremap()
+{
+	unsigned p;
+	unsigned used_pages = 0;
+	unsigned free_pages = 0;
+	unsigned npages;
+    unsigned status;
+
+	//KASSERT(spinlock_do_i_hold(&coremap_lock));
+	//kprintf("\nvalidate_coremap\n");
+	for (p = 0; p < page_max;) {
+		npages = get_core_npages(p);
+		status = coremap[p].status;
+		//kprintf("coremap[%3d] 0x%08x %u\n",p, status, npages);
+        if (status & VM_CORE_USED) {
+			used_pages += npages;
+		} else {
+			free_pages += npages;
+		}
+		p += npages;
+	}
+	KASSERT(used_pages * PAGE_SIZE == used_bytes);
+	KASSERT(used_pages + free_pages == page_max);
+}
 
 /*
  * Initializes the physical to virtual memory map.
@@ -74,7 +105,7 @@ vm_init_coremap()
 	size_t raw_bytes;
 	size_t avail_bytes;
 	size_t coremap_bytes;
-	unsigned raw_pages;
+	unsigned int raw_pages;
 	paddr_t firstfree;
 	paddr_t coremap_paddr;
 
@@ -112,7 +143,12 @@ vm_init_coremap()
 	// convert to a virtual address and clear the coremap.
 	coremap = (struct core_page *)PADDR_TO_KVADDR(coremap_paddr);
 	bzero((void *)coremap, coremap_bytes);
+	coremap[0].status = set_core_status(0, 0, 0, page_max);
+	next_fit = 0;
 	spinlock_init(&coremap_lock);
+	//spinlock_acquire(&coremap_lock);
+	validate_coremap();
+	//spinlock_release(&coremap_lock);
 }
 
 void
@@ -121,19 +157,60 @@ vm_bootstrap(void)
 	/* Do nothing. */
 }
 
-/* Allocate/free some kernel-space virtual pages */
+/* 
+ * Allocate npages of memory from kernel virtual address space.
+ *
+ * Uses coremap as implicit free list and allocates using a next fit
+ * policy.  Fit search is resumed from next_fit index each call and
+ * rolls over at page_max.
+ *
+ * Args:
+ *   npages: Number of contiguous pages to allocate.
+ * 
+ * Returns:
+ *   Virtual address from kernel segment of first page, else NULL
+ *   if unsuccessful.
+ */
 vaddr_t
 alloc_kpages(unsigned npages)
 {
-	paddr_t pa;
+	paddr_t paddr;
+	vaddr_t vaddr;
+    unsigned p;  // Page index into coremap.
+	unsigned block_pages;
 
-	// Temporary hack: allocate from bottom with no freeing.
+	//KASSERT(!spinlock_do_i_hold(&coremap_lock));
 	spinlock_acquire(&coremap_lock);
-	KASSERT((firstpaddr & PAGE_FRAME) == firstpaddr);
-	pa = firstpaddr;
-	firstpaddr += npages * PAGE_SIZE;
+	p = next_fit;
+	KASSERT(p < page_max);
+	do {
+		block_pages = get_core_npages(p);
+        if (!(coremap[p].status & VM_CORE_USED) && (block_pages >= npages)) {
+			break;
+		}
+		p = (p + block_pages) % page_max;
+	} while (p != next_fit);
+	if (block_pages < npages) {
+		spinlock_release(&coremap_lock);
+		return 0;
+	}
+	paddr = firstpaddr + p * PAGE_SIZE;
+	KASSERT((paddr & PAGE_FRAME) == paddr);
+	KASSERT(paddr >= firstpaddr);  // Don't overwrite kernel.
+	vaddr = PADDR_TO_KVADDR(paddr);
+	coremap[p].vaddr = vaddr;
+	coremap[p].status = set_core_status(1, 0, 0, npages);
+	coremap[p].as = NULL;
+	p = (p + npages) % page_max;
+	if (block_pages > npages) {
+		// Split out remaining block of pages.
+		coremap[p].status = set_core_status(0, 0, 0, block_pages - npages);
+	}
+	next_fit = p;
+	used_bytes += npages * PAGE_SIZE;
+	validate_coremap();
 	spinlock_release(&coremap_lock);
-	return PADDR_TO_KVADDR(pa);
+	return vaddr;
 }
 
 void
@@ -147,17 +224,19 @@ free_kpages(vaddr_t addr)
 unsigned
 int
 coremap_used_bytes() {
+	unsigned result;
 
-	/* dumbvm doesn't track page allocations. Return 0 so that khu works. */
-
-	return 0;
+	spinlock_acquire(&coremap_lock);
+	result = used_bytes;
+	spinlock_release(&coremap_lock);
+	return result;
 }
 
 void
 vm_tlbshootdown(const struct tlbshootdown *ts)
 {
 	(void)ts;
-	panic("dumbvm tried to do tlb shootdown?!\n");
+	panic("vm_tlbshootdown not implemented.\n");
 }
 
 int
