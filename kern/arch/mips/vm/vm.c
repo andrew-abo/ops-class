@@ -51,7 +51,6 @@ static unsigned next_fit;  // Coremap index to resume free page search.
 
 static unsigned get_core_npages(unsigned page_index)
 {
-	//KASSERT(spinlock_do_i_hold(&coremap_lock));
     return (coremap[page_index].status) & VM_CORE_NPAGES;
 }
 
@@ -76,12 +75,9 @@ validate_coremap()
 	unsigned npages;
     unsigned status;
 
-	//KASSERT(spinlock_do_i_hold(&coremap_lock));
-	//kprintf("\nvalidate_coremap\n");
 	for (p = 0; p < page_max;) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
-		//kprintf("coremap[%3d] 0x%08x %u\n",p, status, npages);
         if (status & VM_CORE_USED) {
 			used_pages += npages;
 		} else {
@@ -146,9 +142,7 @@ vm_init_coremap()
 	coremap[0].status = set_core_status(0, 0, 0, page_max);
 	next_fit = 0;
 	spinlock_init(&coremap_lock);
-	//spinlock_acquire(&coremap_lock);
 	validate_coremap();
-	//spinlock_release(&coremap_lock);
 }
 
 void
@@ -179,7 +173,6 @@ alloc_kpages(unsigned npages)
     unsigned p;  // Page index into coremap.
 	unsigned block_pages;
 
-	//KASSERT(!spinlock_do_i_hold(&coremap_lock));
 	spinlock_acquire(&coremap_lock);
 	p = next_fit;
 	KASSERT(p < page_max);
