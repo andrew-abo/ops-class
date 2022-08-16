@@ -432,7 +432,7 @@ km5_usage()
 }
 
 /*
- * Allocate and free all physical memory a number of times. Along the we, we
+ * Allocate and free all physical memory a number of times. Along the way, we
  * check coremap_used_bytes to make sure it's reporting the number we're
  * expecting.
  */

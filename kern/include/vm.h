@@ -60,6 +60,8 @@ struct core_page {
 // Initializes physical memory map to enable kmalloc.
 void vm_init_coremap(void);
 
+void dump_coremap(void);
+
 void vm_bootstrap(void);
 
 /* Fault handling function called by trap code */
