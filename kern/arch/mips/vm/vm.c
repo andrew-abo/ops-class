@@ -79,6 +79,24 @@ void dump_coremap()
 }
 
 /*
+ * Converts coremap index to physical address.
+ */
+static paddr_t
+core_idx_to_paddr(unsigned p)
+{
+    return (paddr_t)(p * PAGE_SIZE);
+}
+
+/* 
+ * Converts physical address to coremap index.
+ */
+static unsigned
+paddr_to_core_idx(paddr_t paddr)
+{
+    return (unsigned)(paddr / PAGE_SIZE);
+}
+
+/*
  * Debug check to confirm coremap is valid.
  * Caller is responsible for locking coremap.
  */
@@ -123,52 +141,49 @@ validate_coremap()
 void
 vm_init_coremap()
 {
-	size_t raw_bytes;
-	size_t avail_bytes;
+	size_t total_bytes;  // total bytes in physical memory.
 	size_t coremap_bytes;
-	unsigned int raw_pages;
-	paddr_t firstfree;
+	paddr_t kernel_top;  // Immediately above kernel code.
 	paddr_t coremap_paddr;
+	unsigned p;
 
 	lastpaddr = ram_getsize();
-
-	// First available physical address just above kernel image 
-	// and first thread stack.
-	firstfree = ram_getfirstfree();
-	used_bytes = 0;
+	kernel_top = ram_getfirstfree();
 
 	// Total memory in bytes minus the kernel code.
-	raw_bytes = lastpaddr - firstfree;
-	raw_pages = raw_bytes / PAGE_SIZE;
-	coremap_bytes = raw_pages * sizeof(struct core_page);
-	avail_bytes = raw_bytes - coremap_bytes;
-	page_max = avail_bytes / PAGE_SIZE;
+	total_bytes = lastpaddr;
+	page_max = paddr_to_core_idx(total_bytes);
+	coremap_bytes = page_max * sizeof(struct core_page);
 
 	// &coremap[0] aligned up to core_page size.	
-	coremap_paddr = (firstfree + sizeof(struct core_page) - 1) & 
+	coremap_paddr = (kernel_top + sizeof(struct core_page) - 1) & 
 	    ~(sizeof(struct core_page) - 1);
 
 	// First allocatable page is above coremap and page aligned up.
 	firstpaddr = coremap_paddr + coremap_bytes;
 	firstpaddr = (firstpaddr + PAGE_SIZE - 1) & PAGE_FRAME;
 
+	// From this point, we will be accessing coremap directly, so
+	// convert to a virtual address and zero out.
+	coremap = (struct core_page *)PADDR_TO_KVADDR(coremap_paddr);
+	bzero((void *)coremap, coremap_bytes);	
+	// Mark kernel and coremap pages as allocated in coremap.
+	p = paddr_to_core_idx(firstpaddr);
+	coremap[0].status = set_core_status(1, 0, 0, p);
+	// Mark remainder of pages as free.
+	coremap[p].status = set_core_status(0, 0, 0, page_max - p);
+	next_fit = p;
+	// Includes kernel and coremap in used_bytes.
+	used_bytes = p * PAGE_SIZE;
+	spinlock_init(&coremap_lock);
+	validate_coremap();
+
 	kprintf("\nvm_init_coremap\n");
 	kprintf("lastpaddr  = 0x%07x\n", lastpaddr);
 	kprintf("firstpaddr = 0x%07x\n", firstpaddr);
 	kprintf("coremap    = 0x%07x\n", coremap_paddr);
-	kprintf("coremap_bytes = %u\n", coremap_bytes);
-	kprintf("last - first = %u\n", lastpaddr - firstpaddr);
-	kprintf("page_max = %u\n", page_max);
+	kprintf("page_max   = %u\n", page_max);
 	kprintf("\n");
-
-	// From this point, we will be accessing coremap directly, so
-	// convert to a virtual address and clear the coremap.
-	coremap = (struct core_page *)PADDR_TO_KVADDR(coremap_paddr);
-	bzero((void *)coremap, coremap_bytes);
-	coremap[0].status = set_core_status(0, 0, 0, page_max);
-	next_fit = 0;
-	spinlock_init(&coremap_lock);
-	validate_coremap();
 }
 
 void
@@ -211,11 +226,10 @@ alloc_kpages(unsigned npages)
 		}
 		block_pages = get_core_npages(p);
 	}
-	paddr = firstpaddr + p * PAGE_SIZE;
+	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
 	KASSERT(paddr >= firstpaddr);  // Don't overwrite kernel.
 	vaddr = PADDR_TO_KVADDR(paddr);
-	// TODO(aabo): Defer zero filling until pages are accessed in fault handler.
 	bzero((void *)vaddr, npages * PAGE_SIZE);
 	coremap[p].vaddr = vaddr;
 	coremap[p].status = set_core_status(1, 0, 0, npages);
@@ -235,17 +249,17 @@ alloc_kpages(unsigned npages)
 void
 free_kpages(vaddr_t addr)
 {
-    unsigned page_idx;
+    unsigned p;
 	paddr_t paddr;
 
     KASSERT((addr & PAGE_FRAME) == addr);
 	paddr = KVADDR_TO_PADDR(addr);
 	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
-	page_idx = (paddr - firstpaddr) >> PAGE_SIZE_MSB;
+	p = paddr_to_core_idx(paddr);
 	spinlock_acquire(&coremap_lock);
-	KASSERT(coremap[page_idx].status & VM_CORE_USED);
-	coremap[page_idx].status &= ~VM_CORE_USED;
-	used_bytes -= get_core_npages(page_idx) * PAGE_SIZE;
+	KASSERT(coremap[p].status & VM_CORE_USED);
+	coremap[p].status &= ~VM_CORE_USED;
+	used_bytes -= get_core_npages(p) * PAGE_SIZE;
 	spinlock_release(&coremap_lock);
 }
 

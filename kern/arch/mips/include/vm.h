@@ -35,8 +35,7 @@
  * Machine-dependent VM system definitions.
  */
 
-#define PAGE_SIZE_MSB 12
-#define PAGE_SIZE  (1<<PAGE_SIZE_MSB)  /* size of VM page */
+#define PAGE_SIZE  4096  /* size of VM page */
 #define PAGE_FRAME 0xfffff000   /* mask for getting page number from addr */
 
 /*
