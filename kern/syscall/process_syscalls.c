@@ -469,6 +469,16 @@ int sys_execv(userptr_t progname, userptr_t args)
 		return result;
 	}
 
+	/* Define the user heap in the address space */
+	result = as_define_heap(as);
+	if (result) {
+        kfree(image.data);
+        proc_setas(old_as);
+        as_activate();
+        as_destroy(as);     
+		return result;
+	}
+
 	/* Define the user stack in the address space */
 	result = as_define_stack(as, &stackptr);
 	if (result) {

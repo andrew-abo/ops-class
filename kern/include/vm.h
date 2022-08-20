@@ -54,7 +54,7 @@
 struct core_page {
     unsigned status;  // See bit masks above.
     vaddr_t vaddr;    // Virtual address where this page starts.
-    struct as *as;    // Pointer to address space this page belongs to.
+    struct addrspace *as;    // Pointer to address space this page belongs to.
 };
 
 // Initializes physical memory map to enable kmalloc.
@@ -70,6 +70,9 @@ int vm_fault(int faulttype, vaddr_t faultaddress);
 /* Allocate/free kernel heap pages (called by kmalloc/kfree) */
 vaddr_t alloc_kpages(unsigned npages);
 void free_kpages(vaddr_t addr);
+
+// Free all coremap pages belonging to addrspace as.
+void free_addrspace(struct addrspace *as);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

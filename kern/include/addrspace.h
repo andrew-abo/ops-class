@@ -48,12 +48,45 @@ struct vnode;
  * You write this.
  */
 
-#define SEGMENT_MAX 5  // Memory segments per process.
-#define USER_STACKPAGES  // Max of user stack in pages.
+#define SEGMENT_MAX 10  // Memory segments per process.
+
+// These values can be arbitrarily large since they are virtual,
+// however, we make them finite so we can treat heap
+// and stack like any other segment.
+#define USER_STACK_PAGES 32 // Max size of user stack in pages.
+#define USER_HEAP_PAGES 1024  // Max size of user heap in pages.
+
+// Segment permissions.
+#define VM_SEGMENT_READABLE 0x1
+#define VM_SEGMENT_WRITEABLE 0x2  // (Temporary) write enable.
+#define VM_SEGMENT_EXECUTABLE 0x4
+// Backup copy of true write enable we can use to restore temporary
+// write enable after load operations during which we temporarily
+// enable writes.
+#define VM_SEGMENT_WRITEABLE_ACTUAL 0x8 
+
+// Virtual address bits per page table level.
+//  32b vaddr = 20b VPN + 12b page offset
+//  VPN = 5b + 5b + 5b + 5b
+#define PT_LEVEL0_BITS 5
+#define PT_LEVEL1_BITS 5
+#define PT_LEVEL2_BITS 5
+#define PT_LEVEL3_BITS 5
 
 struct segment {
-    vaddr_t vbase;
-    unsigned npages;
+    vaddr_t vbase;  // Starting virtual address.
+    size_t size;  // Size in bytes.
+    int access;  // Segment permissions.  See flags above.
+};
+
+#define VM_PT_VALID 0x1  // Page in memory.
+
+// Page table entry.
+// We don't store the virtual address which is inherently coded in the indices
+// of the multi-level page tables.
+struct pte {
+    int status;
+    paddr_t paddr;
 };
 
 struct addrspace {
@@ -67,7 +100,9 @@ struct addrspace {
         paddr_t as_stackpbase;
 #else
         struct segment segments[SEGMENT_MAX];
-
+        int next_segment;  // Next segment index to populate.
+        struct pte ****pages0[1<<PT_LEVEL1_BITS];  // Level0 page table.
+        vaddr_t vheaptop;  // Current top of heap.
 #endif
 };
 
@@ -126,6 +161,7 @@ int               as_define_region(struct addrspace *as,
 int               as_prepare_load(struct addrspace *as);
 int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
+int               as_define_heap(struct addrspace *as);
 
 
 /*

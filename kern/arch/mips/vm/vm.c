@@ -97,6 +97,24 @@ paddr_to_core_idx(paddr_t paddr)
 }
 
 /*
+ * Frees all coremap pages belonging to addrspace as.
+ */
+void 
+free_addrspace(struct addrspace *as)
+{
+	unsigned p;
+	unsigned npages;
+
+	for (p = 0; p < page_max;) {
+		npages = get_core_npages(p);
+		if (coremap[p].as == as) {
+			coremap[p].status = set_core_status(0, 0, 0, npages);
+		}
+		p += npages;
+	}	
+}
+
+/*
  * Debug check to confirm coremap is valid.
  * Caller is responsible for locking coremap.
  */

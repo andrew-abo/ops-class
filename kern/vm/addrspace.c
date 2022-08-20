@@ -33,6 +33,8 @@
 #include <addrspace.h>
 #include <vm.h>
 #include <proc.h>
+#include <mips/tlb.h>
+#include <spl.h>
 
 /*
  * Note! If OPT_DUMBVM is set, as is the case until you start the VM
@@ -40,6 +42,9 @@
  * used. The cheesy hack versions in dumbvm.c are used instead.
  */
 
+/*
+ * Allocates and intializes an empty addrspace struct.
+ */
 struct addrspace *
 as_create(void)
 {
@@ -50,10 +55,11 @@ as_create(void)
 		return NULL;
 	}
 
-	/*
-	 * Initialize as needed.
-	 */
-
+	as->next_segment = 0;
+	for (int p = 0; p < 1<<PT_LEVEL1_BITS; p++) {
+		as->pages0[p] = NULL;
+	}
+	as->vheaptop = 0;
 	return as;
 }
 
@@ -77,33 +83,69 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	return 0;
 }
 
+/*
+ * Frees all dynamic memory associated with page table in addrspace as.
+ */
+static void
+destroy_page_table(struct addrspace *as)
+{
+	struct pte ****pages1;
+	struct pte ***pages2;
+	struct pte **pages3;
+
+    for (int p0 = 0; p0 < (1<<PT_LEVEL0_BITS); p0++) {
+		pages1 = as->pages0[p0];
+		if (pages1 != NULL)	{
+			for (int p1 = 0; p1 < (1<<PT_LEVEL1_BITS); p1++) {
+				pages2 = pages1[p1];
+				if (pages2 != NULL) {
+					for (int p2 = 0; p2 < (1<<PT_LEVEL2_BITS); p2++) {
+						pages3 = pages2[p2];
+						if (pages3 != NULL) {
+							for (int p3 = 0; p3 < (1<<PT_LEVEL3_BITS); p3++) {
+								if (pages3[p3] != NULL) {
+									kfree(pages3[p3]);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+/*
+ * Frees all coremap pages belonging to this addrspace.
+ */
 void
 as_destroy(struct addrspace *as)
 {
-	/*
-	 * Clean up as needed.
-	 */
-
+    free_addrspace(as);
+	destroy_page_table(as);
 	kfree(as);
 }
 
 void
 as_activate(void)
 {
+	int i, spl;
 	struct addrspace *as;
 
 	as = proc_getas();
 	if (as == NULL) {
-		/*
-		 * Kernel thread without an address space; leave the
-		 * prior address space in place.
-		 */
 		return;
 	}
 
-	/*
-	 * Write this.
-	 */
+	/* Disable interrupts on this CPU while frobbing the TLB. */
+	spl = splhigh();
+
+	// Invalidate all TLB entries from previous process.
+	for (i=0; i<NUM_TLB; i++) {
+		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+	}
+
+	splx(spl);
 }
 
 void
@@ -130,53 +172,85 @@ int
 as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
 		 int readable, int writeable, int executable)
 {
-	/*
-	 * Write this.
-	 */
+	int s;
 
-	(void)as;
-	(void)vaddr;
-	(void)memsize;
-	(void)readable;
-	(void)writeable;
-	(void)executable;
-	return ENOSYS;
+	if (as->next_segment > SEGMENT_MAX) {
+		return ENOMEM;
+	}
+    s = as->next_segment++;
+	as->segments[s].vbase = vaddr;
+	as->segments[s].size = memsize;
+	as->segments[s].access = (readable ? VM_SEGMENT_READABLE : 0) | 
+	                         (writeable ? VM_SEGMENT_WRITEABLE|VM_SEGMENT_WRITEABLE_ACTUAL : 0) |
+							 (executable ? VM_SEGMENT_EXECUTABLE : 0);
+	return 0;
 }
 
+/*
+ * Temporarily enables write to all segments so they can be loaded without fault.
+ */
 int
 as_prepare_load(struct addrspace *as)
 {
-	/*
-	 * Write this.
-	 */
-
-	(void)as;
+	for (int s = 0; s < as->next_segment; s++) {
+		as->segments[s].access |= VM_SEGMENT_WRITEABLE;
+	}
 	return 0;
 }
 
+/* 
+ * Restores segments original writeable flags once load is complete.
+ */
 int
 as_complete_load(struct addrspace *as)
 {
-	/*
-	 * Write this.
-	 */
-
-	(void)as;
+	for (int s = 0; s < as->next_segment; s++) {
+        as->segments[s].access &= ~VM_SEGMENT_WRITEABLE;
+		if (as->segments[s].access & VM_SEGMENT_WRITEABLE_ACTUAL) {
+			as->segments[s].access |= VM_SEGMENT_WRITEABLE;
+		}
+	}
 	return 0;
 }
 
+/*
+ * Defines a stack region and initializes stack pointer.
+ */
 int
 as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 {
-	/*
-	 * Write this.
-	 */
+	vaddr_t stack_bottom;
+	size_t stack_size;
 
-	(void)as;
-
-	/* Initial user-level stack pointer */
+    // Define the stack as a generic segment.
+	// We only declare segmentation fault if user access outside this max stack
+	// size.
 	*stackptr = USERSTACK;
+	stack_size = USER_STACK_PAGES * PAGE_SIZE;
+	stack_bottom = USERSTACK - stack_size;
+	as_define_region(as, stack_bottom, stack_size, 1/*read*/, 1/*write*/, 0/*exec*/);
+	return 0;
+}
 
+/*
+ * Defines a heap region and initializes heap top.
+ */
+int
+as_define_heap(struct addrspace *as)
+{
+	vaddr_t top = 0;
+	vaddr_t segment_top;
+
+	// Places heap above last segment.
+	for (int p = 0; p < as->next_segment; p++) {
+        segment_top = as->segments[p].vbase + as->segments[p].size;
+		if ((segment_top < USERSTACK) && (segment_top > top)) {
+			top = segment_top;
+		}
+	}
+	// Align up to next page.
+	as->vheaptop = (top + PAGE_SIZE - 1) & PAGE_FRAME;
+	KASSERT(as->vheaptop / PAGE_SIZE + USER_HEAP_PAGES < USERSTACK - USER_STACK_PAGES);
 	return 0;
 }
 
