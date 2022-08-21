@@ -56,7 +56,7 @@ as_create(void)
 	}
 
 	as->next_segment = 0;
-	for (int p = 0; p < 1<<PT_LEVEL1_BITS; p++) {
+	for (int p = 0; p < 1<<VPN_BITS_PER_LEVEL; p++) {
 		as->pages0[p] = NULL;
 	}
 	as->vheaptop = 0;
@@ -84,8 +84,54 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 }
 
 /*
+ * Descend multi-level page table and print contents.
+ */
+void
+dump_page_table(void **pages, int level) 
+{
+	const char *tab[] = {"", "..", "....", "......"};
+	int next_level = level + 1;
+	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
+        if (pages[idx] == NULL) {
+			kprintf("[%2d]%s NULL\n", idx, tab[level]);
+			continue;
+		}		
+		if (level == PT_LEVELS - 1) {
+            kprintf("[%2d]%s 0x%x: 0x%x\n", idx, tab[level], 
+			  ((struct pte **)pages)[idx]->paddr, 
+			  ((struct pte **)pages)[idx]->status);
+			continue;
+        }
+		dump_page_table(pages[idx], next_level);
+	}
+}
+
+/*
+ * Descend multi-level page table and free dynamic memory.
+ */
+static void
+destroy_page_table(void **pages, int level) 
+{
+	int next_level = level + 1;
+	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
+        if (pages[idx] == NULL) {
+			continue;
+		}		
+		if (level == PT_LEVELS - 1) {
+            kfree(pages[idx]);
+			continue;
+        }
+		destroy_page_table(pages[idx], next_level);
+	}
+	if (level > 0) {
+        kfree(pages);
+	}
+}
+
+/*
  * Frees all dynamic memory associated with page table in addrspace as.
  */
+/*
 static void
 destroy_page_table(struct addrspace *as)
 {
@@ -114,6 +160,7 @@ destroy_page_table(struct addrspace *as)
 		}
 	}
 }
+*/
 
 /*
  * Frees all coremap pages belonging to this addrspace.
@@ -122,7 +169,7 @@ void
 as_destroy(struct addrspace *as)
 {
     free_addrspace(as);
-	destroy_page_table(as);
+	destroy_page_table(as->pages0, 0);
 	kfree(as);
 }
 
@@ -254,5 +301,89 @@ as_define_heap(struct addrspace *as)
 	as->vheaptop = (top + PAGE_SIZE - 1) & PAGE_FRAME;
 	KASSERT(as->vheaptop / PAGE_SIZE + USER_HEAP_PAGES < USERSTACK - USER_STACK_PAGES);
 	return 0;
+}
+
+/*
+ * Returns 1 if address in a valid segment and operation is allowed, else 0.
+ *
+ * Args:
+ *   as: Pointer to addrspace with defined segments.
+ *   vaddr: Virtual address to check.
+ *   read_request: 1 if reading, else 0.
+ * 
+ * Returns:
+ *   1 if vaddr in as->segments[] and read_request matches segment 
+ *   permissions, else 0.
+ */
+int
+as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
+{
+	vaddr_t vbase;
+	size_t size;
+
+    for (int s = 0; s < as->next_segment; s++) {
+		vbase = as->segments[s].vbase;
+		size = as->segments[s].size;
+		if ((vaddr >= vbase) && (vaddr < vbase + size)) {
+			if (read_request) {
+				return as->segments[s].access & VM_SEGMENT_READABLE ? 1 : 0;
+			}
+			return as->segments[s].access & VM_SEGMENT_WRITEABLE ? 1 : 0;
+		}
+	}
+	return 0;
+}
+
+/*
+ * Looks up vaddr in page table.  If page table entry does not exit
+ * it will be created.  Returns pointer to page table entry.
+ * 
+ * Args:
+ *   as: Pointer to addrspace.
+ *   vaddr: Virtual address to find.
+ * 
+ * Returns:
+ *   Pointer to corresponding page table entry if successful, else NULL.
+ */
+struct pte
+*as_touch_pte(struct addrspace *as, vaddr_t vaddr)
+{
+	int idx;
+	unsigned vpn;
+	void **pages;
+	void **next_pages;
+	const unsigned mask[] = {0x1f<<15, 0x1f<<10, 0x1f<<5, 0x1f};
+	const unsigned shift[] = {15, 10, 5, 0};
+	struct pte *pte;
+	int level;
+
+	// Walk down to leaf page table.
+	vpn = vaddr >> PAGE_OFFSET_BITS;
+	pages = as->pages0;
+	for (level = 0; level < PT_LEVELS - 1; level++) {
+        idx = (vpn & mask[level]) >> shift[level];
+        next_pages = pages[idx];
+        if (next_pages == NULL) {
+            next_pages = kmalloc(sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
+            if (next_pages == NULL) {
+                return NULL;
+			}
+			bzero(next_pages, sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
+		}
+		pages = next_pages;
+	}
+	// Look up PTE in leaf page table.
+	idx = vpn & mask[level];
+	pte = pages[idx];
+	if (pte == NULL) {
+		pte = kmalloc(sizeof(struct pte));
+		if (pte == NULL) {
+			return NULL;
+		}
+		pte->status = 0;
+		pte->paddr = (paddr_t)NULL;
+		pages[idx] = pte;
+	}
+	return pte;
 }
 

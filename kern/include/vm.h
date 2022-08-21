@@ -69,7 +69,7 @@ int vm_fault(int faulttype, vaddr_t faultaddress);
 
 /* Allocate/free kernel heap pages (called by kmalloc/kfree) */
 vaddr_t alloc_kpages(unsigned npages);
-void free_kpages(vaddr_t addr);
+void free_kpages(vaddr_t vaddr);
 
 /* Allocate/free coremap pages */
 vaddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);

@@ -298,13 +298,20 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 }
 
 void
-free_kpages(vaddr_t addr)
+free_kpages(vaddr_t vaddr)
 {
-    unsigned p;
 	paddr_t paddr;
 
-    KASSERT((addr & PAGE_FRAME) == addr);
-	paddr = KVADDR_TO_PADDR(addr);
+    KASSERT((vaddr & PAGE_FRAME) == vaddr);
+	paddr = KVADDR_TO_PADDR(vaddr);
+	free_pages(paddr);
+}
+
+void
+free_pages(paddr_t paddr)
+{
+    unsigned p;
+
 	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
 	spinlock_acquire(&coremap_lock);
@@ -332,18 +339,68 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 	panic("vm_tlbshootdown not implemented.\n");
 }
 
+/*
+ * Flags a page as dirty in coremap and TLB.
+ * 
+ * Returns:
+ *   0 on success, else 1.
+ */
+static int
+flag_page_as_dirty(vaddr_t vaddr)
+{
+	paddr_t paddr;
+	unsigned p;
+	int spl;
+	int tlb_idx;
+	uint32_t entryhi, entrylo;
+
+	spinlock_acquire(&coremap_lock);
+	spl = splhigh();
+	tlb_idx = tlb_probe(vaddr, 0);
+	if (tlb_idx < 0) {
+        splx(spl);
+        spinlock_release(&coremap_lock);
+        return 1;
+    }
+    tlb_read(&entryhi, &entrylo, tlb_idx);
+    paddr = entrylo & TLBLO_PPAGE;
+    entrylo |= TLBLO_DIRTY;
+    tlb_write(entryhi, entrylo, tlb_idx);
+    p = paddr_to_core_idx(paddr);
+    coremap[p].status |= VM_CORE_DIRTY;
+    splx(spl);
+    spinlock_release(&coremap_lock);
+    return 0;
+}
+
+/*
+ * Inserts a valid page table entry into translation lookaside buffer.
+ */
+static void
+vm_tlb_insert(struct pte *pte, vaddr_t vaddr)
+{
+	uint32_t ehi, elo;
+	int spl;
+
+	/* Disable interrupts on this CPU while frobbing the TLB. */
+	spl = splhigh();
+	ehi = vaddr;
+	elo = (pte->paddr) | TLBLO_VALID;
+	DEBUG(DB_VM, "vm_tlb_insert: 0x%x -> 0x%x\n", vaddr, pte->paddr);
+	tlb_random(ehi, elo);
+	splx(spl);	
+}
+
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
-	paddr_t paddr;
-	int i;
-	uint32_t ehi, elo;
 	struct addrspace *as;
-	int spl;
+	int read_request;
+	struct pte *pte;
 
 	faultaddress &= PAGE_FRAME;
 
-	DEBUG(DB_VM, "dumbvm: fault: 0x%x\n", faultaddress);
+	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
@@ -372,38 +429,38 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		return EFAULT;
 	}
 
-	/* Assert that the address space has been set up properly. */
-	//KASSERT(as->as_vbase1 != 0);
+	/* Assert that the address space is not empty. */
+	KASSERT(as->next_segment != 0);
 
-	// Check address is in valid defined region.
-	//vbase1 = as->as_vbase1;
-	//vtop1 = vbase1 + as->as_npages1 * PAGE_SIZE;
-	//stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
-	//stacktop = USERSTACK;
-
-	// If invalid return EFAULT.
-	paddr = 0;
-
-	/* make sure it's page-aligned */
-	KASSERT((paddr & PAGE_FRAME) == paddr);
-
-	/* Disable interrupts on this CPU while frobbing the TLB. */
-	spl = splhigh();
-
-	for (i=0; i<NUM_TLB; i++) {
-		tlb_read(&ehi, &elo, i);
-		if (elo & TLBLO_VALID) {
-			continue;
-		}
-		ehi = faultaddress;
-		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
-		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
-		tlb_write(ehi, elo, i);
-		splx(spl);
+	read_request = faulttype == VM_FAULT_READ;
+	if (!as_operation_is_valid(as, faultaddress, read_request)) {
+		return EFAULT;
+	}
+	// All TLB entries are initially read-only (TLB "dirty=0").
+	// We detect writes as VM_FAULT_READONLY and flag as dirty
+	// for page cleaning.  Set write enable (TLB "dirty=1")
+	// and retry.
+	if (faulttype == VM_FAULT_READONLY) {
+		flag_page_as_dirty(faultaddress);
 		return 0;
 	}
-
-	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
-	splx(spl);
-	return EFAULT;
+	// Find or create a page table entry.
+	pte = as_touch_pte(as, faultaddress);
+	if (pte == NULL) {
+		return ENOMEM;
+	}
+	if (!(pte->status & VM_PTE_VALID)) {
+		// TODO(aabo): Insert swapping logic.
+		// First access such as heap, stack, load_segment, 
+		// so allocate a new page.
+		pte->paddr = alloc_pages(1, as, faultaddress);
+		if (pte->paddr == (paddr_t)NULL) {
+			return ENOMEM;
+		}
+		pte->status |= VM_PTE_VALID;
+	}
+	/* make sure it's page-aligned */
+	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
+	vm_tlb_insert(pte, faultaddress);
+	return 0;
 }

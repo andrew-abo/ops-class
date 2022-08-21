@@ -141,3 +141,52 @@ addrspacetest5(int nargs, char **args)
 	return 0;
 }
 
+// Tests as_operation_is_valid() returns correct value.
+int
+addrspacetest6(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *as;
+
+    kprintf("Starting as6 test...\n");
+    as = as_create();
+    KASSERT(as != NULL);
+    as_define_region(as, 0x10000, 0x2000, 1, 1, 0);
+    as_define_region(as, 0x20000, 0x2331, 1, 0, 1);
+    as_define_region(as, 0x30000, 0x2331, 0, 1, 0);
+    as_define_region(as, 0x40000, 0x2331, 1, 1, 0);
+    as_define_region(as, 0x50000, 0x2331, 0, 1, 0);
+    as_define_region(as, 0x60000, 0x9990, 1, 0, 1);
+    KASSERT(as_operation_is_valid(as, 0x11000, 1));
+    KASSERT(!as_operation_is_valid(as, 0x13000, 1));
+    KASSERT(!as_operation_is_valid(as, 0x13000, 0));
+    KASSERT(!as_operation_is_valid(as, 0x30000, 1));
+    KASSERT(as_operation_is_valid(as, 0x10000, 0));
+    KASSERT(!as_operation_is_valid(as, 0x20001, 0));    
+    as_destroy(as);
+	success(TEST161_SUCCESS, SECRET, "as6");
+
+	return 0;
+}
+
+// Tests as_touch_pte() creates correct page table.
+int
+addrspacetest7(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *as;
+
+    kprintf("Starting as7 test...\n");
+    as = as_create();
+    KASSERT(as != NULL);
+    as_define_region(as, 0x1000, 0x2000, 1, 1, 0);
+    as_touch_pte(as, 0x00001000);
+    dump_page_table(as->pages0, 0);
+    //KASSERT(as->pages0[0] == NULL);
+    as_destroy(as);
+	success(TEST161_SUCCESS, SECRET, "as7");
+
+	return 0;
+}

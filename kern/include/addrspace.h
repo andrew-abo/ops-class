@@ -69,10 +69,10 @@ struct vnode;
 // Virtual address bits per page table level.
 //  32b vaddr = 20b VPN + 12b page offset
 //  VPN = 5b + 5b + 5b + 5b
-#define PT_LEVEL0_BITS 5
-#define PT_LEVEL1_BITS 5
-#define PT_LEVEL2_BITS 5
-#define PT_LEVEL3_BITS 5
+#define PT_LEVELS 4
+#define VPN_BITS 20
+#define PAGE_OFFSET_BITS 12
+#define VPN_BITS_PER_LEVEL (VPN_BITS / PT_LEVELS)
 
 struct segment {
     vaddr_t vbase;  // Starting virtual address.
@@ -80,7 +80,7 @@ struct segment {
     int access;  // Segment permissions.  See flags above.
 };
 
-#define VM_PT_VALID 0x1  // Page in memory.
+#define VM_PTE_VALID 0x1  // Page in memory.
 
 // Page table entry.
 // We don't store the virtual address which is inherently coded in the indices
@@ -102,7 +102,7 @@ struct addrspace {
 #else
         struct segment segments[SEGMENT_MAX];
         int next_segment;  // Next segment index to populate.
-        struct pte ****pages0[1<<PT_LEVEL1_BITS];  // Level0 page table.
+        void *pages0[1<<VPN_BITS_PER_LEVEL];  // Level0 page table.
         vaddr_t vheaptop;  // Current top of heap.
 #endif
 };
@@ -174,5 +174,8 @@ int               as_define_heap(struct addrspace *as);
 
 int load_elf(struct vnode *v, vaddr_t *entrypoint);
 
+int as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request);
+struct pte *as_touch_pte(struct addrspace *as, vaddr_t vaddr);
+void dump_page_table(void **pages, int level);
 
 #endif /* _ADDRSPACE_H_ */
