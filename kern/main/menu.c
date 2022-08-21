@@ -595,6 +595,11 @@ static const char *testmenu[] = {
 	"[km3] Large kmalloc test            ",
 	"[km4] Multipage kmalloc test        ",
 	"[km5] kmalloc coremap alloc test    ",
+	"[as1] addrspace create test         ",
+	"[as2] addrspace define region test  ",
+	"[as3] addrspace load test           ",
+	"[as4] addrspace load test           ",
+	"[as5] addrspace load test           ",
 	"[tt1] Thread test 1                 ",
 	"[tt2] Thread test 2                 ",
 	"[tt3] Thread test 3                 ",
@@ -755,6 +760,13 @@ static struct {
 	{ "km3",	kmalloctest3 },
 	{ "km4",	kmalloctest4 },
 	{ "km5",	kmalloctest5 },
+
+	/* addrspace tests */
+	{"as1",     addrspacetest1 },
+	{"as2",     addrspacetest2 },
+	{"as3",     addrspacetest3 },
+	{"as4",     addrspacetest4 },
+	{"as5",     addrspacetest5 },
 #if OPT_NET
 	{ "net",	nettest },
 #endif

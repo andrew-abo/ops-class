@@ -30,6 +30,7 @@
 #ifndef _MIPS_VM_H_
 #define _MIPS_VM_H_
 
+#include <types.h>
 
 /*
  * Machine-dependent VM system definitions.

@@ -130,6 +130,11 @@ int kmallocstress(int, char **);
 int kmalloctest3(int, char **);
 int kmalloctest4(int, char **);
 int kmalloctest5(int, char **);
+int addrspacetest1(int, char **);
+int addrspacetest2(int, char **);
+int addrspacetest3(int, char **);
+int addrspacetest4(int, char **);
+int addrspacetest5(int, char **);
 int nettest(int, char **);
 
 /* Routine for running a user-level program. */

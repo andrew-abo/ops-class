@@ -167,6 +167,8 @@ as_deactivate(void)
  * write, or execute permission should be set on the segment. At the
  * moment, these are ignored. When you write the VM system, you may
  * want to implement them.
+ * 
+ * No error checking for overlapping segments.
  */
 int
 as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,

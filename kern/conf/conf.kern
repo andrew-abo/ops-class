@@ -444,6 +444,7 @@ defoption netfs
 #                                      #
 ########################################
 
+file        test/addrspacetest.c
 file		test/arraytest.c
 file		test/bitmaptest.c
 file        test/fhtest.c
