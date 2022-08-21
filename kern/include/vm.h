@@ -71,6 +71,10 @@ int vm_fault(int faulttype, vaddr_t faultaddress);
 vaddr_t alloc_kpages(unsigned npages);
 void free_kpages(vaddr_t addr);
 
+/* Allocate/free coremap pages */
+vaddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
+void free_pages(vaddr_t vaddr);
+
 // Free all coremap pages belonging to addrspace as.
 void free_addrspace(struct addrspace *as);
 

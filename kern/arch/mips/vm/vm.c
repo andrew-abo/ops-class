@@ -228,7 +228,35 @@ vaddr_t
 alloc_kpages(unsigned npages)
 {
 	paddr_t paddr;
-	vaddr_t vaddr;
+
+	paddr = alloc_pages(npages, NULL, (vaddr_t)NULL);
+	if (paddr == 0) {
+		return 0;
+	}
+	return PADDR_TO_KVADDR(paddr);
+}
+
+/*
+ * Allocates npages of contiguous pages in coremap and assign 
+ * to addrspace as at virtual address vaddr.
+ * 
+ * To allocate a kernel page:
+ * paddr = alloc_pages(1, NULL, NULL)
+ * 
+ * Args:
+ *   npages: Number of contiguous pages to allocate.
+ *   as: Pointer to address space to assign to.
+ *   vaddr: Virtual address to assign to first page.
+ *          If as==NULL or vaddr==NULL, then vaddr will be
+ *          direct mapped to KSEG0.
+ * 
+ * Returns:
+ *   Physical address of first page on success, else 0.
+ */
+paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
+{
+	paddr_t paddr;
+	vaddr_t vaddr_direct;
     unsigned p;  // Page index into coremap.
 	unsigned block_pages;
 
@@ -239,6 +267,7 @@ alloc_kpages(unsigned npages)
 	while ((coremap[p].status & VM_CORE_USED) || (block_pages < npages)) {
 		p = (p + block_pages) % page_max;
 		if (p == next_fit) {
+			// No free pages.
             spinlock_release(&coremap_lock);
             return 0;
 		}
@@ -247,11 +276,15 @@ alloc_kpages(unsigned npages)
 	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
 	KASSERT(paddr >= firstpaddr);  // Don't overwrite kernel.
-	vaddr = PADDR_TO_KVADDR(paddr);
-	bzero((void *)vaddr, npages * PAGE_SIZE);
-	coremap[p].vaddr = vaddr;
+	vaddr_direct = PADDR_TO_KVADDR(paddr);
+	bzero((void *)vaddr_direct, npages * PAGE_SIZE);
 	coremap[p].status = set_core_status(1, 0, 0, npages);
-	coremap[p].as = NULL;
+	coremap[p].as = as;
+	if ((as == NULL) || (vaddr == (vaddr_t)NULL)) {
+        coremap[p].vaddr = vaddr_direct;
+	} else {
+		coremap[p].vaddr = vaddr;
+	}
 	p = (p + npages) % page_max;
 	if (block_pages > npages) {
 		// Split out remaining block of pages.
@@ -261,7 +294,7 @@ alloc_kpages(unsigned npages)
 	used_bytes += npages * PAGE_SIZE;
 	validate_coremap();
 	spinlock_release(&coremap_lock);
-	return vaddr;
+	return paddr;
 }
 
 void
