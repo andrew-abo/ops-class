@@ -89,19 +89,20 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 void
 dump_page_table(void **pages, int level) 
 {
-	const char *tab[] = {"", "..", "....", "......"};
+	const char *tab[] = {"", "     ", "          ", "               "};
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
         if (pages[idx] == NULL) {
-			kprintf("[%2d]%s NULL\n", idx, tab[level]);
 			continue;
 		}		
 		if (level == PT_LEVELS - 1) {
-            kprintf("[%2d]%s 0x%x: 0x%x\n", idx, tab[level], 
+            kprintf("%s[%2d] 0x%x: 0x%x\n", tab[level], idx, 
 			  ((struct pte **)pages)[idx]->paddr, 
 			  ((struct pte **)pages)[idx]->status);
 			continue;
         }
+		kprintf("%s[%2d]-+\n", tab[level], idx);
+		kprintf("%s     V\n", tab[level]);
 		dump_page_table(pages[idx], next_level);
 	}
 }
@@ -364,11 +365,13 @@ struct pte
         idx = (vpn & mask[level]) >> shift[level];
         next_pages = pages[idx];
         if (next_pages == NULL) {
+			// Allocate and install next level page table.
             next_pages = kmalloc(sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
             if (next_pages == NULL) {
                 return NULL;
 			}
 			bzero(next_pages, sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
+			pages[idx] = next_pages;
 		}
 		pages = next_pages;
 	}

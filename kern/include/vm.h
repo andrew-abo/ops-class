@@ -52,7 +52,7 @@
                             // starting at current index.
 
 struct core_page {
-    unsigned status;  // See bit masks above.
+    uint32_t status;  // See bit masks above.
     vaddr_t vaddr;    // Virtual address where this page starts.
     struct addrspace *as;    // Pointer to address space this page belongs to.
 };

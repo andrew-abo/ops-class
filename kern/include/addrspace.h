@@ -86,7 +86,7 @@ struct segment {
 // We don't store the virtual address which is inherently coded in the indices
 // of the multi-level page tables.
 struct pte {
-    int status;
+    uint32_t status;
     paddr_t paddr;
 };
 

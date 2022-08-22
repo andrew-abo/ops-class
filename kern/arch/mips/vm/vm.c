@@ -391,6 +391,16 @@ vm_tlb_insert(struct pte *pte, vaddr_t vaddr)
 	splx(spl);	
 }
 
+/*
+ * Handles translation lookaside buffer faults.
+ *
+ * Args:
+ *   faulttype: enumerated fault type defined in vm.h.
+ *   faultaddress: access to address that caused fault.
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
@@ -398,8 +408,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	int read_request;
 	struct pte *pte;
 
+	// TLB faults should only occur in KUSEG.
+	KASSERT(faultaddress <= MIPS_KSEG0);
 	faultaddress &= PAGE_FRAME;
-
 	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 
 	switch (faulttype) {

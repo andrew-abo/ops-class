@@ -170,21 +170,63 @@ addrspacetest6(int nargs, char **args)
 	return 0;
 }
 
-// Tests as_touch_pte() creates correct page table.
+// Tests as_touch_pte() can create/store/load
+// page table entries.
 int
 addrspacetest7(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
     struct addrspace *as;
+    struct pte *pte0, *pte1;
 
     kprintf("Starting as7 test...\n");
     as = as_create();
     KASSERT(as != NULL);
-    as_define_region(as, 0x1000, 0x2000, 1, 1, 0);
-    as_touch_pte(as, 0x00001000);
+    //as_define_region(as, 0x1000, 0x2000, 1, 1, 0);
+    // Tests page @ 0x00000000 can be created/written/read.
+    pte0 = as_touch_pte(as, 0x00000000);
+    KASSERT(pte0 != NULL);
+    pte0->status = 0xdeadbeef;
+    pte0->paddr = 0xffeeaa55;
+    pte1 = as_touch_pte(as, 0x00000000);
+    KASSERT(pte1->status == 0xdeadbeef);
+    KASSERT(pte1->paddr == 0xffeeaa55);
+    
+    pte0 = as_touch_pte(as, 0x00001000);
+    KASSERT(pte0 != NULL);
+
+    // Tests address within same page maps to same pte.
+    pte0 = as_touch_pte(as, 0x00007000);
+    pte1 = as_touch_pte(as, 0x00007001);
+    KASSERT(pte0 != NULL);
+    KASSERT(pte0 == pte1);
+
+    pte0 = as_touch_pte(as, 0x0001f000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_touch_pte(as, 0x00020000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_touch_pte(as, 0x00021000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_touch_pte(as, 0x003e0000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_touch_pte(as, 0x07c00000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_touch_pte(as, 0xf8000000);
+    KASSERT(pte0 != NULL);
+
+    // Tests level0 table has correct empty/non-empty entries.
     dump_page_table(as->pages0, 0);
-    //KASSERT(as->pages0[0] == NULL);
+    KASSERT(as->pages0[0] != NULL);
+    KASSERT(as->pages0[1] == NULL);
+    KASSERT(as->pages0[2] == NULL);
+    KASSERT(as->pages0[3] == NULL);
+    KASSERT(as->pages0[4] == NULL);
+    KASSERT(as->pages0[5] == NULL);
+    KASSERT(as->pages0[8] == NULL);
+    KASSERT(as->pages0[16] == NULL);
+    KASSERT(as->pages0[30] == NULL);
+    KASSERT(as->pages0[31] != NULL);
     as_destroy(as);
 	success(TEST161_SUCCESS, SECRET, "as7");
 
