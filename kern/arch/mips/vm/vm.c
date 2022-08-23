@@ -97,21 +97,23 @@ paddr_to_core_idx(paddr_t paddr)
 }
 
 /*
- * Frees all coremap pages belonging to addrspace as.
+ * Free coremap page by physical address.
+ *
+ * This function should only be used to free single pages,
+ * i.e. userspace pages.  Freeing a page that belongs
+ * to a group of pages (e.g. created by alloc_kpages())
+ * will not work correctly.
  */
 void 
-free_addrspace(struct addrspace *as)
+free_core_page(paddr_t paddr)
 {
 	unsigned p;
-	unsigned npages;
-
-	for (p = 0; p < page_max;) {
-		npages = get_core_npages(p);
-		if (coremap[p].as == as) {
-			coremap[p].status = set_core_status(0, 0, 0, npages);
-		}
-		p += npages;
-	}	
+	p = paddr_to_core_idx(paddr);
+	spinlock_acquire(&coremap_lock);
+	KASSERT(get_core_npages(p) == 1);
+	coremap[p].status = coremap[p].status & (~VM_CORE_USED) & (~VM_CORE_DIRTY);
+	used_bytes -= PAGE_SIZE;
+	spinlock_release(&coremap_lock);
 }
 
 /*

@@ -75,8 +75,7 @@ void free_kpages(vaddr_t vaddr);
 vaddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
 void free_pages(vaddr_t vaddr);
 
-// Free all coremap pages belonging to addrspace as.
-void free_addrspace(struct addrspace *as);
+void free_core_page(paddr_t paddr);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

@@ -63,23 +63,118 @@ as_create(void)
 	return as;
 }
 
-int
-as_copy(struct addrspace *old, struct addrspace **ret)
+/*
+ * Creates a new physical and corresponding virtual page.
+ *
+ * Args:
+ *   as: Pointer to address space to create page in.
+ *   vaddr: Virtual address to assign.
+ * 
+ * Returns:
+ *   Pointer to page table entry, else NULL if unsuccessful.
+ */
+struct pte 
+*as_create_page(struct addrspace *as, vaddr_t vaddr)
 {
-	struct addrspace *newas;
+    paddr_t paddr;
+	struct pte *pte;
+	
+	vaddr &= PAGE_FRAME;
+	// Must be a user space virtual address.
+	KASSERT(vaddr < MIPS_KSEG0);
+    pte = as_touch_pte(as, vaddr);
+    if (pte == NULL) {
+        return NULL;
+    }
+	// Page must not already exist.
+	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
+    paddr = alloc_pages(1, as, vaddr);
+    if (paddr == (paddr_t)NULL) {
+        return NULL;
+    }
+    pte->paddr = paddr;
+	pte->status = VM_PTE_VALID;
+    return pte;
+}
 
-	newas = as_create();
-	if (newas==NULL) {
+/*
+ * Copies src page table and all referenced physical pages to dst.
+ *
+ * New physical pages are allocated and independent copies of the
+ * pages are made, so physical addresses are different, but
+ * virtual addresses will be the same.  For example, to
+ * copy everything:
+ * 
+ * copy_page_table(dst, src->pages0, 0, 0x0)
+ * 
+ * Args:
+ *   dst: Pointer to destination address space.
+ *   src_pages: Pointer to source address space level0 page table.
+ *   vpn: initial virtual page number (normally 0).
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
+static int
+copy_page_table(struct addrspace *dst, void **src_pages, int level, vaddr_t vpn) 
+{
+	struct pte *dst_pte, *src_pte;
+	vaddr_t vaddr, next_vpn;
+
+	int next_level = level + 1;
+	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
+        if (src_pages[idx] == NULL) {
+			continue;
+		}		
+		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
+		if (level == PT_LEVELS - 1) {
+			// Make copy of physical page.
+			vaddr = next_vpn << PAGE_OFFSET_BITS;
+			dst_pte = as_create_page(dst, vaddr);
+			if (dst_pte == NULL) {
+				return ENOMEM;
+			}
+			// Accessing the source will either touch a valid page in memory,
+			// or cause it to swap in and make it valid.
+			src_pte = (struct pte *)src_pages[idx];
+			memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
+			        (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
+			dst_pte->status = src_pte->status;
+			KASSERT(dst_pte->status | VM_PTE_VALID);
+			continue;
+        }
+		copy_page_table(dst, src_pages[idx], next_level, next_vpn);
+	}
+	return 0;
+}
+
+int
+as_copy(struct addrspace *src, struct addrspace **ret)
+{
+	struct addrspace *dst;
+	int result;
+
+	*ret = NULL;
+	dst = as_create();
+	if (dst == NULL) {
 		return ENOMEM;
 	}
 
-	/*
-	 * Write this.
-	 */
+	// TODO(aabo): Implement deferred copy on write.
 
-	(void)old;
-
-	*ret = newas;
+	for (int s = 0; s < src->next_segment; s++) {
+		dst->segments[s].vbase = src->segments[s].vbase;
+		dst->segments[s].size = src->segments[s].size;
+		dst->segments[s].access = src->segments[s].access;
+	}
+	dst->next_segment = src->next_segment;
+	dst->vheaptop = src->vheaptop;
+	result = copy_page_table(dst, src->pages0, 0, (vaddr_t)0x0);
+	if (result) {
+		as_destroy(dst);
+		return result;
+	}
+	*ret = dst;
 	return 0;
 }
 
@@ -89,16 +184,18 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 void
 dump_page_table(void **pages, int level) 
 {
+	struct pte *pte;
 	const char *tab[] = {"", "     ", "          ", "               "};
 	int next_level = level + 1;
+
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
         if (pages[idx] == NULL) {
 			continue;
 		}		
 		if (level == PT_LEVELS - 1) {
-            kprintf("%s[%2d] 0x%x: 0x%x\n", tab[level], idx, 
-			  ((struct pte **)pages)[idx]->paddr, 
-			  ((struct pte **)pages)[idx]->status);
+			pte = (struct pte *)pages[idx];
+            kprintf("%s[%2d] 0x%x: 0x%x\n", tab[level], idx, pte->paddr,
+			  pte->status);
 			continue;
         }
 		kprintf("%s[%2d]-+\n", tab[level], idx);
@@ -108,18 +205,29 @@ dump_page_table(void **pages, int level)
 }
 
 /*
- * Descend multi-level page table and free dynamic memory.
+ * Descend multi-level page table and free dynamic memory
+ * used by table iteself and coremap pages referenced
+ * by page table.  To destroy table from the top:
+ * 
+ * destroy_page_table(as->pages0, 0)
+ * 
+ * Args:
+ *   pages: Pointer to array of pages, e.g. as->pages0.
+ *   level: Starting level to descend from, e.g. 0.
  */
 static void
 destroy_page_table(void **pages, int level) 
 {
+	struct pte *pte;
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
         if (pages[idx] == NULL) {
 			continue;
 		}		
 		if (level == PT_LEVELS - 1) {
-            kfree(pages[idx]);
+			pte = (struct pte *)pages[idx];
+			free_core_page(pte->paddr);
+            kfree(pte);
 			continue;
         }
 		destroy_page_table(pages[idx], next_level);
@@ -130,46 +238,11 @@ destroy_page_table(void **pages, int level)
 }
 
 /*
- * Frees all dynamic memory associated with page table in addrspace as.
- */
-/*
-static void
-destroy_page_table(struct addrspace *as)
-{
-	struct pte ****pages1;
-	struct pte ***pages2;
-	struct pte **pages3;
-
-    for (int p0 = 0; p0 < (1<<PT_LEVEL0_BITS); p0++) {
-		pages1 = as->pages0[p0];
-		if (pages1 != NULL)	{
-			for (int p1 = 0; p1 < (1<<PT_LEVEL1_BITS); p1++) {
-				pages2 = pages1[p1];
-				if (pages2 != NULL) {
-					for (int p2 = 0; p2 < (1<<PT_LEVEL2_BITS); p2++) {
-						pages3 = pages2[p2];
-						if (pages3 != NULL) {
-							for (int p3 = 0; p3 < (1<<PT_LEVEL3_BITS); p3++) {
-								if (pages3[p3] != NULL) {
-									kfree(pages3[p3]);
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-}
-*/
-
-/*
  * Frees all coremap pages belonging to this addrspace.
  */
 void
 as_destroy(struct addrspace *as)
 {
-    free_addrspace(as);
 	destroy_page_table(as->pages0, 0);
 	kfree(as);
 }

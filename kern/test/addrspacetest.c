@@ -183,36 +183,32 @@ addrspacetest7(int nargs, char **args)
     kprintf("Starting as7 test...\n");
     as = as_create();
     KASSERT(as != NULL);
-    //as_define_region(as, 0x1000, 0x2000, 1, 1, 0);
-    // Tests page @ 0x00000000 can be created/written/read.
-    pte0 = as_touch_pte(as, 0x00000000);
+    pte0 = as_create_page(as, 0x00000000);
     KASSERT(pte0 != NULL);
-    pte0->status = 0xdeadbeef;
-    pte0->paddr = 0xffeeaa55;
+
     pte1 = as_touch_pte(as, 0x00000000);
-    KASSERT(pte1->status == 0xdeadbeef);
-    KASSERT(pte1->paddr == 0xffeeaa55);
-    
-    pte0 = as_touch_pte(as, 0x00001000);
+    KASSERT(pte0 == pte1);
+
+    pte0 = as_create_page(as, 0x00001000);
     KASSERT(pte0 != NULL);
 
     // Tests address within same page maps to same pte.
-    pte0 = as_touch_pte(as, 0x00007000);
+    pte0 = as_create_page(as, 0x00007000);
     pte1 = as_touch_pte(as, 0x00007001);
     KASSERT(pte0 != NULL);
     KASSERT(pte0 == pte1);
 
-    pte0 = as_touch_pte(as, 0x0001f000);
+    pte0 = as_create_page(as, 0x0001f000);
     KASSERT(pte0 != NULL);
-    pte0 = as_touch_pte(as, 0x00020000);
+    pte0 = as_create_page(as, 0x00020000);
     KASSERT(pte0 != NULL);
-    pte0 = as_touch_pte(as, 0x00021000);
+    pte0 = as_create_page(as, 0x00021000);
     KASSERT(pte0 != NULL);
-    pte0 = as_touch_pte(as, 0x003e0000);
+    pte0 = as_create_page(as, 0x003e0000);
     KASSERT(pte0 != NULL);
-    pte0 = as_touch_pte(as, 0x07c00000);
+    pte0 = as_create_page(as, 0x07c00000);
     KASSERT(pte0 != NULL);
-    pte0 = as_touch_pte(as, 0xf8000000);
+    pte0 = as_create_page(as, 0x7f000000);
     KASSERT(pte0 != NULL);
 
     // Tests level0 table has correct empty/non-empty entries.
@@ -224,11 +220,66 @@ addrspacetest7(int nargs, char **args)
     KASSERT(as->pages0[4] == NULL);
     KASSERT(as->pages0[5] == NULL);
     KASSERT(as->pages0[8] == NULL);
-    KASSERT(as->pages0[16] == NULL);
-    KASSERT(as->pages0[30] == NULL);
-    KASSERT(as->pages0[31] != NULL);
+    KASSERT(as->pages0[15] != NULL);
+    KASSERT(as->pages0[31] == NULL);
     as_destroy(as);
 	success(TEST161_SUCCESS, SECRET, "as7");
 
 	return 0;
 }
+
+// Tests as_copy correctly copies page table
+// entries and physical pages.
+int
+addrspacetest8(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *src, *dst;
+    struct pte *pte0, *pte1;
+    int result;
+    void **level1;
+    void **level2;
+    struct pte **level3;
+
+    kprintf("Starting as8 test...\n");
+    src = as_create();
+    KASSERT(src != NULL);
+
+    pte0 = as_create_page(src, 0x00010000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x00020000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x00030000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x00400000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x00510000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x06000000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x07000000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x0a000000);
+    KASSERT(pte0 != NULL);
+    pte0 = as_create_page(src, 0x7f000000);
+    KASSERT(pte0 != NULL);
+    // Write some data to copy.
+    *((uint32_t *)PADDR_TO_KVADDR(pte0->paddr)) = 0xdeadbeef;
+
+    result = as_copy(src, &dst);
+    KASSERT(result == 0);
+
+    level1 = dst->pages0[15];
+    level2 = level1[28];
+    level3 = level2[0];
+    pte1 = level3[0];
+    KASSERT(*((uint32_t *)PADDR_TO_KVADDR(pte1->paddr)) == 0xdeadbeef);
+
+    as_destroy(src);
+    as_destroy(dst);
+	success(TEST161_SUCCESS, SECRET, "as8");
+
+	return 0;
+}
+
