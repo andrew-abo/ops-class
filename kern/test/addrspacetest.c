@@ -212,7 +212,7 @@ addrspacetest7(int nargs, char **args)
     KASSERT(pte0 != NULL);
 
     // Tests level0 table has correct empty/non-empty entries.
-    dump_page_table(as->pages0, 0);
+    dump_page_table(as);
     KASSERT(as->pages0[0] != NULL);
     KASSERT(as->pages0[1] == NULL);
     KASSERT(as->pages0[2] == NULL);

@@ -82,16 +82,17 @@ struct pte
 	vaddr &= PAGE_FRAME;
 	// Must be a user space virtual address.
 	KASSERT(vaddr < MIPS_KSEG0);
-    pte = as_touch_pte(as, vaddr);
-    if (pte == NULL) {
-        return NULL;
-    }
-	// Page must not already exist.
-	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
     paddr = alloc_pages(1, as, vaddr);
     if (paddr == (paddr_t)NULL) {
         return NULL;
     }
+    pte = as_touch_pte(as, vaddr);
+    if (pte == NULL) {
+		free_pages(paddr);
+        return NULL;
+    }
+	// Page must not already exist.
+	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
     return pte;
@@ -178,30 +179,39 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	return 0;
 }
 
-/*
- * Descend multi-level page table and print contents.
- */
-void
-dump_page_table(void **pages, int level) 
+static void
+visit_page_table(void **pages, int level, vaddr_t vpn) 
 {
 	struct pte *pte;
 	const char *tab[] = {"", "     ", "          ", "               "};
+	vaddr_t vaddr, next_vpn;
 	int next_level = level + 1;
 
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
         if (pages[idx] == NULL) {
 			continue;
-		}		
+		}
+		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
 		if (level == PT_LEVELS - 1) {
+			vaddr = next_vpn << PAGE_OFFSET_BITS;
 			pte = (struct pte *)pages[idx];
-            kprintf("%s[%2d] 0x%x: 0x%x\n", tab[level], idx, pte->paddr,
-			  pte->status);
+            kprintf("%s[%2d] v0x%08x -> p0x%08x: status=0x%x\n", tab[level], 
+			  idx, vaddr, pte->paddr, pte->status);
 			continue;
         }
-		kprintf("%s[%2d]-+\n", tab[level], idx);
-		kprintf("%s     V\n", tab[level]);
-		dump_page_table(pages[idx], next_level);
+		kprintf("%s[%2d]-v\n", tab[level], idx);
+		visit_page_table(pages[idx], next_level, next_vpn);
 	}
+}
+
+/*
+ * Descend multi-level page table belonging to address space as 
+ * and print contents.
+ */
+void
+dump_page_table(struct addrspace *as)
+{
+    visit_page_table(as->pages0, 0, 0x0);
 }
 
 /*
@@ -226,7 +236,7 @@ destroy_page_table(void **pages, int level)
 		}		
 		if (level == PT_LEVELS - 1) {
 			pte = (struct pte *)pages[idx];
-			free_core_page(pte->paddr);
+			free_pages(pte->paddr);
             kfree(pte);
 			continue;
         }
@@ -243,6 +253,7 @@ destroy_page_table(void **pages, int level)
 void
 as_destroy(struct addrspace *as)
 {
+	vm_tlb_erase();
 	destroy_page_table(as->pages0, 0);
 	kfree(as);
 }
@@ -250,23 +261,13 @@ as_destroy(struct addrspace *as)
 void
 as_activate(void)
 {
-	int i, spl;
 	struct addrspace *as;
 
 	as = proc_getas();
 	if (as == NULL) {
 		return;
 	}
-
-	/* Disable interrupts on this CPU while frobbing the TLB. */
-	spl = splhigh();
-
-	// Invalidate all TLB entries from previous process.
-	for (i=0; i<NUM_TLB; i++) {
-		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
-	}
-
-	splx(spl);
+	vm_tlb_erase();
 }
 
 void
@@ -318,6 +319,10 @@ as_prepare_load(struct addrspace *as)
 	for (int s = 0; s < as->next_segment; s++) {
 		as->segments[s].access |= VM_SEGMENT_WRITEABLE;
 	}
+	// TODO(aabo): We will still get 1 unnecessary fault since pages are initially
+	// installed in TLB as dirty=0 (read-only).  We could have some
+	// extra state that installs them as dirty=1 when loading.
+	// then clears dirty from TLB in as_complete_load.
 	return 0;
 }
 
@@ -333,6 +338,13 @@ as_complete_load(struct addrspace *as)
 			as->segments[s].access |= VM_SEGMENT_WRITEABLE;
 		}
 	}
+	// TODO(aabo): set dirty=0 for all TLB entries.
+	// If we leave dirty=1 (write enable) on pages that are
+	// actually read only, we won't detect any write faults.
+	// If a page really is writeable or modified, we have
+	// that state already saved in page table or coremap.
+	// when a write occurs, it will get flagged as dirty,
+	// and write enabled which is redundant but ok.
 	return 0;
 }
 

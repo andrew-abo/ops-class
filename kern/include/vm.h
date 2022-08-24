@@ -74,8 +74,7 @@ void free_kpages(vaddr_t vaddr);
 /* Allocate/free coremap pages */
 vaddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
 void free_pages(vaddr_t vaddr);
-
-void free_core_page(paddr_t paddr);
+void vm_tlb_erase(void);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

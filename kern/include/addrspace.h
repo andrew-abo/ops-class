@@ -176,7 +176,7 @@ int load_elf(struct vnode *v, vaddr_t *entrypoint);
 
 int as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request);
 struct pte *as_touch_pte(struct addrspace *as, vaddr_t vaddr);
-void dump_page_table(void **pages, int level);
+void dump_page_table(struct addrspace *as);
 struct pte *as_create_page(struct addrspace *as, vaddr_t vaddr);
 
 #endif /* _ADDRSPACE_H_ */

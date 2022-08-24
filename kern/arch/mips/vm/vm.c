@@ -69,11 +69,11 @@ void dump_coremap()
 	unsigned status;
 
 	spinlock_acquire(&coremap_lock);
-	for (p = 0; p < page_max;) {
+	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
-		kprintf("coremap[%3u]: status=0x%08x, vaddr=0x%08x\n", p, status, coremap[p].vaddr);
-    	p += npages;
+		kprintf("coremap[%3u]: status=0x%08x, vaddr=0x%08x, npages=%u\n", p, status, 
+		  coremap[p].vaddr, npages);
 	}
 	spinlock_release(&coremap_lock);
 }
@@ -97,22 +97,36 @@ paddr_to_core_idx(paddr_t paddr)
 }
 
 /*
- * Free coremap page by physical address.
+ * Invalidates all entries in TLB.
  *
- * This function should only be used to free single pages,
- * i.e. userspace pages.  Freeing a page that belongs
- * to a group of pages (e.g. created by alloc_kpages())
- * will not work correctly.
- */
+  */
 void 
-free_core_page(paddr_t paddr)
+vm_tlb_erase()
 {
-	unsigned p;
+	int spl;
+
+	/* Disable interrupts on this CPU while frobbing the TLB. */
+	spl = splhigh();
+	for (int i = 0; i < NUM_TLB; i++) {
+        tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+	}
+	splx(spl);
+}
+
+/*
+ * Frees block of pages starting at paddr from coremap.
+ */
+void
+free_pages(paddr_t paddr)
+{
+    unsigned p;
+
+	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
 	spinlock_acquire(&coremap_lock);
-	KASSERT(get_core_npages(p) == 1);
-	coremap[p].status = coremap[p].status & (~VM_CORE_USED) & (~VM_CORE_DIRTY);
-	used_bytes -= PAGE_SIZE;
+	KASSERT(coremap[p].status & VM_CORE_USED);
+	coremap[p].status &= ~VM_CORE_USED;
+	used_bytes -= get_core_npages(p) * PAGE_SIZE;
 	spinlock_release(&coremap_lock);
 }
 
@@ -283,8 +297,13 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	coremap[p].status = set_core_status(1, 0, 0, npages);
 	coremap[p].as = as;
 	if ((as == NULL) || (vaddr == (vaddr_t)NULL)) {
+		// Kernel page.
         coremap[p].vaddr = vaddr_direct;
 	} else {
+		// Userspace page.
+		// We only allocate user pages one at a time.
+		// We don't support freeing contiguous groups of user pages.
+		KASSERT(npages == 1);
 		coremap[p].vaddr = vaddr;
 	}
 	p = (p + npages) % page_max;
@@ -299,6 +318,9 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	return paddr;
 }
 
+/*
+ * Frees a block of kernel pages starting at vaddr.
+ */
 void
 free_kpages(vaddr_t vaddr)
 {
@@ -307,20 +329,6 @@ free_kpages(vaddr_t vaddr)
     KASSERT((vaddr & PAGE_FRAME) == vaddr);
 	paddr = KVADDR_TO_PADDR(vaddr);
 	free_pages(paddr);
-}
-
-void
-free_pages(paddr_t paddr)
-{
-    unsigned p;
-
-	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
-	p = paddr_to_core_idx(paddr);
-	spinlock_acquire(&coremap_lock);
-	KASSERT(coremap[p].status & VM_CORE_USED);
-	coremap[p].status &= ~VM_CORE_USED;
-	used_bytes -= get_core_npages(p) * PAGE_SIZE;
-	spinlock_release(&coremap_lock);
 }
 
 unsigned
@@ -376,6 +384,34 @@ flag_page_as_dirty(vaddr_t vaddr)
 }
 
 /*
+static void
+vm_tlb_dump()
+{
+	int spl;
+	uint32_t entryhi, entrylo;
+	vaddr_t vaddr;
+	paddr_t paddr;
+	int dirty;
+	int valid;
+
+	spl = splhigh();
+	kprintf("vm_tlb_dump:\n");
+	for (int idx = 0; idx < NUM_TLB; idx++) {
+		tlb_read(&entryhi, &entrylo, idx);
+		vaddr = entryhi & TLBHI_VPAGE;
+		paddr = entrylo & TLBLO_PPAGE;
+		dirty = entrylo & TLBLO_DIRTY ? 1 : 0;
+		valid = entrylo & TLBLO_VALID ? 1 : 0;
+		if (valid) {
+		  kprintf("[%2d] v0x%08x -> p0x%08x, dirty=%d, valid=%d, 0x%x\n", idx, 
+		    vaddr, paddr, dirty, valid, entrylo);
+		}
+	}
+	splx(spl);
+}
+*/
+
+/*
  * Inserts a valid page table entry into translation lookaside buffer.
  */
 static void
@@ -383,14 +419,22 @@ vm_tlb_insert(struct pte *pte, vaddr_t vaddr)
 {
 	uint32_t ehi, elo;
 	int spl;
+	int idx;
 
 	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();
 	ehi = vaddr;
 	elo = (pte->paddr) | TLBLO_VALID;
+	KASSERT(elo & TLBLO_VALID);
 	DEBUG(DB_VM, "vm_tlb_insert: 0x%x -> 0x%x\n", vaddr, pte->paddr);
-	tlb_random(ehi, elo);
-	splx(spl);	
+	// Check if vaddr already in TLB so we don't duplicate.
+	idx = tlb_probe(ehi, 0);
+	if (idx < 0) {
+        tlb_random(ehi, elo);
+	} else {
+		tlb_write(ehi, elo, idx);
+	}
+	splx(spl);
 }
 
 /*
@@ -410,9 +454,11 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	int read_request;
 	struct pte *pte;
 
+	// WARNING: Using kprintf in this function may cause TLB to
+	// behave unexpectedly.
+
 	// TLB faults should only occur in KUSEG.
 	KASSERT(faultaddress <= MIPS_KSEG0);
-	faultaddress &= PAGE_FRAME;
 	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 
 	switch (faulttype) {
@@ -449,12 +495,15 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
 		return EFAULT;
 	}
+	faultaddress &= PAGE_FRAME;
 	// All TLB entries are initially read-only (TLB "dirty=0").
 	// We detect writes as VM_FAULT_READONLY and flag as dirty
 	// for page cleaning.  Set write enable (TLB "dirty=1")
 	// and retry.
 	if (faulttype == VM_FAULT_READONLY) {
-		flag_page_as_dirty(faultaddress);
+		if (flag_page_as_dirty(faultaddress)) {
+			panic("Unable to set TLB dirty bit.");
+		}
 		return 0;
 	}
 	// Find or create a page table entry.
