@@ -501,10 +501,11 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// for page cleaning.  Set write enable (TLB "dirty=1")
 	// and retry.
 	if (faulttype == VM_FAULT_READONLY) {
-		if (flag_page_as_dirty(faultaddress)) {
-			panic("Unable to set TLB dirty bit.");
+		if (flag_page_as_dirty(faultaddress) == 0) {
+			// Successfully flagged, retry access.
+            return 0;
 		}
-		return 0;
+		// Page is no longer in TLB.
 	}
 	// Find or create a page table entry.
 	pte = as_touch_pte(as, faultaddress);

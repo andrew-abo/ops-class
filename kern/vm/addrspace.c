@@ -236,7 +236,9 @@ destroy_page_table(void **pages, int level)
 		}		
 		if (level == PT_LEVELS - 1) {
 			pte = (struct pte *)pages[idx];
-			free_pages(pte->paddr);
+			if (pte->paddr & VM_PTE_VALID) {
+                free_pages(pte->paddr);
+			}
             kfree(pte);
 			continue;
         }
@@ -253,7 +255,6 @@ destroy_page_table(void **pages, int level)
 void
 as_destroy(struct addrspace *as)
 {
-	vm_tlb_erase();
 	destroy_page_table(as->pages0, 0);
 	kfree(as);
 }
