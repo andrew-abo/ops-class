@@ -510,6 +510,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// Find or create a page table entry.
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
+		panic("vm_fault: as_touch_pte failed on vaddr=0x%08x\n", faultaddress);
 		return ENOMEM;
 	}
 	if (!(pte->status & VM_PTE_VALID)) {
@@ -518,6 +519,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		// so allocate a new page.
 		pte->paddr = alloc_pages(1, as, faultaddress);
 		if (pte->paddr == (paddr_t)NULL) {
+			panic("vm_fault: alloc_pages failed");
 			return ENOMEM;
 		}
 		pte->status |= VM_PTE_VALID;

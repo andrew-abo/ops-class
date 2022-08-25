@@ -89,6 +89,7 @@ syscall(struct trapframe *tf)
 	off_t abs_offset;
 	char buf[sizeof(int)];
 	pid_t pid;
+	void *mem;
 
 	KASSERT(curthread != NULL);
 	KASSERT(curthread->t_curspl == 0);
@@ -197,6 +198,11 @@ syscall(struct trapframe *tf)
 
 	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
+		break;
+
+		case SYS_sbrk:
+		err = sys_sbrk(tf->tf_a0, &mem);
+		retval =  (int32_t)mem;
 		break;
 
 		case SYS_waitpid:

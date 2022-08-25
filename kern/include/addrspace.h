@@ -54,7 +54,7 @@ struct vnode;
 // These values can be arbitrarily large since they are virtual,
 // however, we make them finite so we can treat heap
 // and stack like any other segment.
-#define USER_STACK_PAGES 32 // Max size of user stack in pages.
+#define USER_STACK_PAGES 1024 // Max size of user stack in pages.
 #define USER_HEAP_PAGES 1024  // Max size of user heap in pages.
 
 // Segment permissions.
@@ -83,11 +83,10 @@ struct segment {
 #define VM_PTE_VALID 0x1  // Page in memory.
 
 // Page table entry.
-// We don't store the virtual address which is inherently coded in the indices
-// of the multi-level page tables.
 struct pte {
     uint32_t status;
     paddr_t paddr;
+    vaddr_t vaddr;
 };
 
 struct addrspace {
@@ -103,6 +102,7 @@ struct addrspace {
         struct segment segments[SEGMENT_MAX];
         int next_segment;  // Next segment index to populate.
         void *pages0[1<<VPN_BITS_PER_LEVEL];  // Level0 page table.
+        vaddr_t vheapbase;  // Starting address of heap.
         vaddr_t vheaptop;  // Current top of heap.
 #endif
 };
@@ -178,5 +178,6 @@ int as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 struct pte *as_touch_pte(struct addrspace *as, vaddr_t vaddr);
 void dump_page_table(struct addrspace *as);
 struct pte *as_create_page(struct addrspace *as, vaddr_t vaddr);
+void as_destroy_page(struct addrspace *as, vaddr_t vaddr);
 
 #endif /* _ADDRSPACE_H_ */

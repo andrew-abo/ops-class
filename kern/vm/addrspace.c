@@ -59,6 +59,7 @@ as_create(void)
 	for (int p = 0; p < 1<<VPN_BITS_PER_LEVEL; p++) {
 		as->pages0[p] = NULL;
 	}
+	as->vheapbase = 0;
 	as->vheaptop = 0;
 	return as;
 }
@@ -92,6 +93,8 @@ struct pte
         return NULL;
     }
 	// Page must not already exist.
+	// TODO(aabo): What if we attempt to create a page that is swapped out?
+	// Add check for pte->backing == NULL?
 	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
@@ -233,12 +236,13 @@ destroy_page_table(void **pages, int level)
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
         if (pages[idx] == NULL) {
 			continue;
-		}		
+		}
 		if (level == PT_LEVELS - 1) {
 			pte = (struct pte *)pages[idx];
-			if (pte->paddr & VM_PTE_VALID) {
+            pages[idx] = NULL;
+			if (pte->status & VM_PTE_VALID) {
                 free_pages(pte->paddr);
-			}
+            }
             kfree(pte);
 			continue;
         }
@@ -247,6 +251,21 @@ destroy_page_table(void **pages, int level)
 	if (level > 0) {
         kfree(pages);
 	}
+}
+
+/*
+ * Destroys page table entry corresponding to vaddr and
+ * corresponding core page if valid.
+ * 
+ * Args:
+ *   as: Pointer to address space to modify.
+ *   vaddr: Virtual address of page to destroy.
+ */
+void
+as_destroy_page(struct addrspace *as, vaddr_t vaddr)
+{
+    (void)as;
+	(void)vaddr;
 }
 
 /*
@@ -385,8 +404,9 @@ as_define_heap(struct addrspace *as)
 		}
 	}
 	// Align up to next page.
-	as->vheaptop = (top + PAGE_SIZE - 1) & PAGE_FRAME;
-	KASSERT(as->vheaptop / PAGE_SIZE + USER_HEAP_PAGES < USERSTACK - USER_STACK_PAGES);
+	as->vheapbase = (top + PAGE_SIZE - 1) & PAGE_FRAME;
+	as->vheaptop = as->vheapbase;
+	KASSERT(as->vheapbase / PAGE_SIZE + USER_HEAP_PAGES < USERSTACK - USER_STACK_PAGES);
 	return 0;
 }
 
