@@ -138,6 +138,7 @@ int addrspacetest5(int, char **);
 int addrspacetest6(int, char **);
 int addrspacetest7(int, char **);
 int addrspacetest8(int, char **);
+int addrspacetest9(int, char **);
 int nettest(int, char **);
 
 /* Routine for running a user-level program. */

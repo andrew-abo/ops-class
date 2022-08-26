@@ -254,22 +254,8 @@ destroy_page_table(void **pages, int level)
 }
 
 /*
- * Destroys page table entry corresponding to vaddr and
- * corresponding core page if valid.
- * 
- * Args:
- *   as: Pointer to address space to modify.
- *   vaddr: Virtual address of page to destroy.
- */
-void
-as_destroy_page(struct addrspace *as, vaddr_t vaddr)
-{
-    (void)as;
-	(void)vaddr;
-}
-
-/*
- * Frees all coremap pages belonging to this addrspace.
+ * Destroy all dynamic memory associated with this address space
+ * including page table and coremap pages.
  */
 void
 as_destroy(struct addrspace *as)
@@ -442,18 +428,34 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 }
 
 /*
- * Looks up vaddr in page table.  If page table entry does not exit
- * it will be created.  Returns pointer to page table entry.
+ * Looks up vaddr in page table.
  * 
+ * Look up an existing pte or create if does not exist:
+ * void *tab;
+ * as_touch_pte(as, vaddr, 1, &tab);
+ * pte = *(struct pte **)tab;
+ * pte->paddr = ...
+ *
+ * Read-only lookup pte then replace with NULL.
+ * as_touch_pte(as, vaddr, 0, &tab);
+ * pte = *(struct pte **)tab;
+ * *tab = NULL;
+ *  
  * Args:
  *   as: Pointer to addrspace.
  *   vaddr: Virtual address to find.
+ *   create: Creates missing levels and entries if 1, else
+ *     returns NULL when encounters a missing level or entry.
+ *   tab: Pointer to table cell containing pointer to page table entry.
+ *      We use pointer to pointer so caller can modify the table 
+ *      if needed.
  * 
  * Returns:
- *   Pointer to corresponding page table entry if successful, else NULL.
+ *  0 on success.  tab will refer to the table entry or NULL if not found.
+ *  Else errno value if there was a syscall failure.
  */
-struct pte
-*as_touch_pte(struct addrspace *as, vaddr_t vaddr)
+static int 
+touch_pte(struct addrspace *as, vaddr_t vaddr, int create, void **tab)
 {
 	int idx;
 	unsigned vpn;
@@ -471,10 +473,15 @@ struct pte
         idx = (vpn & mask[level]) >> shift[level];
         next_pages = pages[idx];
         if (next_pages == NULL) {
+			if (!create) {
+				// vaddr not found.
+				*tab = NULL;
+				return 0;
+			}
 			// Allocate and install next level page table.
             next_pages = kmalloc(sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
-            if (next_pages == NULL) {
-                return NULL;
+            if (next_pages == NULL) {				
+                return ENOMEM;
 			}
 			bzero(next_pages, sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
 			pages[idx] = next_pages;
@@ -485,14 +492,67 @@ struct pte
 	idx = vpn & mask[level];
 	pte = pages[idx];
 	if (pte == NULL) {
+		if (!create) {
+			*tab = NULL;
+			return 0;
+		}
 		pte = kmalloc(sizeof(struct pte));
 		if (pte == NULL) {
-			return NULL;
-		}
-		pte->status = 0;
-		pte->paddr = (paddr_t)NULL;
-		pages[idx] = pte;
+            return ENOMEM;
+        }
+        pte->status = 0;
+        pte->paddr = (paddr_t)NULL;
+        pages[idx] = pte;
+    }
+	*tab = pages + idx;
+	return 0;
+}
+
+/*
+ * Look up an existing page table entry or create if does not exist.
+  *  
+ * Args:
+ *   as: Pointer to addrspace.
+ *   vaddr: Virtual address to find.
+ * 
+ * Returns:
+ *   Pointer to pte else NULL if could not find and create.
+ */
+
+struct pte
+*as_touch_pte(struct addrspace *as, vaddr_t vaddr)
+{
+	int result;
+	void *tab;
+	result = touch_pte(as, vaddr, 1, &tab);
+	if (result) {
+		return NULL;
 	}
-	return pte;
+	return *(struct pte **)tab;
+}
+
+/*
+ * Destroys page table entry corresponding to vaddr and
+ * corresponding core page if valid.
+ * 
+ * Args:
+ *   as: Pointer to address space to modify.
+ *   vaddr: Virtual address of page to destroy.
+ */
+void
+as_destroy_page(struct addrspace *as, vaddr_t vaddr)
+{
+	struct pte *pte;
+	void *tab;
+	int result;
+
+	result = touch_pte(as, vaddr, 0, &tab);
+	KASSERT(result == 0);
+	KASSERT(tab != NULL);
+	pte = *(struct pte **)tab;
+	// Remove pte from table.
+	*(struct pte **)tab = NULL;
+	free_pages(pte->paddr);
+	kfree(pte);
 }
 

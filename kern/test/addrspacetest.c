@@ -283,3 +283,31 @@ addrspacetest8(int nargs, char **args)
 	return 0;
 }
 
+// Tests as_destroy_page can destroy a page.
+int
+addrspacetest9(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *as;
+    struct pte *pte0;
+
+    kprintf("Starting as9 test...\n");
+    as = as_create();
+    KASSERT(as != NULL);
+    pte0 = as_create_page(as, 0x00040000);
+    KASSERT(pte0 != NULL);
+
+    dump_page_table(as);
+
+    // Destroy actual page.
+    as_destroy_page(as, 0x00040000);
+
+    dump_page_table(as);
+
+    // TODO(aabo): appears to be a memory leak.
+    as_destroy(as);
+	success(TEST161_SUCCESS, SECRET, "as9");
+
+	return 0;
+}

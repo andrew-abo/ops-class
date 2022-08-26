@@ -602,7 +602,8 @@ static const char *testmenu[] = {
 	"[as5] addrspace define stack test   ",
 	"[as6] addrspace op is valid test    ",
 	"[as7] addrspace touch pte test      ",
-	"[as8] addrspace copy test      ",
+	"[as8] addrspace copy test           ",
+	"[as9] addrspace destroy page test   ",
 	"[tt1] Thread test 1                 ",
 	"[tt2] Thread test 2                 ",
 	"[tt3] Thread test 3                 ",
@@ -773,6 +774,7 @@ static struct {
 	{"as6",     addrspacetest6 },
 	{"as7",     addrspacetest7 },
 	{"as8",     addrspacetest8 },
+	{"as9",     addrspacetest9 },
 #if OPT_NET
 	{ "net",	nettest },
 #endif
