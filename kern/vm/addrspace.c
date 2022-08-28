@@ -177,8 +177,10 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 		dst->segments[s].access = src->segments[s].access;
 	}
 	dst->next_segment = src->next_segment;
+	lock_acquire(src->heap_lock);
 	dst->vheapbase = src->vheapbase;
 	dst->vheaptop = src->vheaptop;
+	lock_release(src->heap_lock);
 	result = copy_page_table(dst, src->pages0, 0, (vaddr_t)0x0);
 	if (result) {
 		as_destroy(dst);
@@ -436,6 +438,7 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 {
 	vaddr_t vbase;
 	size_t size;
+	int result;
 
     for (int s = 0; s < as->next_segment; s++) {
 		vbase = as->segments[s].vbase;
@@ -447,11 +450,14 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 			return as->segments[s].access & VM_SEGMENT_WRITEABLE ? 1 : 0;
 		}
 	}
-	// Heap is a special segment.
+	// Heap is a special segment not stored in as->segments[].
+	result = 0;
+	lock_acquire(as->heap_lock);
 	if ((vaddr >= as->vheapbase) && (vaddr < as->vheaptop)) {
-		return 1;
+        result = 1;
     }
-	return 0;
+	lock_release(as->heap_lock);
+	return result;
 }
 
 /*
