@@ -245,7 +245,7 @@ checkpagelight(volatile void *baseptr, unsigned pageoffset, bool neednl)
 			tprintf("\n");
 		}
 		tprintf("FAILED: data mismatch at offset 0 of page "
-		       "at 0x%lx: %lu vs. %u\n",
+		       "at 0x%lx: actual=%lu, expected=%u\n",
 		       (unsigned long)(uintptr_t)pl,
 		       pl[0], pageoffset);
 		return -1;
@@ -1047,6 +1047,9 @@ stresstest(unsigned long seed, bool large)
 		r = random();
 		pages = r % (large ? 32 : 8);
 		neg = pages <= num && ((r & 128) == 0);
+
+		//printf("num = %4d, pages = %4d\n", num, neg ? -pages : pages);
+
 		if (!neg && num + pages > (large ? 128 : 32)) {
 			neg = 1;
 		}
@@ -1064,6 +1067,23 @@ stresstest(unsigned long seed, bool large)
 		for (j=0; j<num; j++) {
 			if (checkpagelight(op, j, true)) {
 				tprintf("\n");
+				// TODO(aabo): fails here.  
+				// Seems not to fail if test is run slowly, e.g. has lots of printf.
+				// Point of failure varies even if seed is fixed.
+				// => Seems timing dependent.  But there's only one thread, so I don't see a race.
+				// does printf alter the TLB state?
+				// * Runs out of memory first if force always positive sbrk requests.
+				//   => something wrong with negative sbrk requests.
+				// * Commenting out as_destroy_page() allows test to pass.
+				// * Fails pretty early when fails. i <= 45.
+				// * I confirmed pte referred to by vaddr in error had valid=1 and referred to
+				// a paddr that was valid=1 in coremap.  coremap correctly pointed back
+				// to addrspace. and pte.  indeed, the data at paddr was 0 as reported
+				// by the test using the direct mapped paddr 0x8XXXXXXX.
+				// Cause a segfault so gdb can breakpoint in vm_fault.
+				printf("i = %d, num = %d, pages = %d, j = %d\n", i, num, pages, j);
+				printf("Forcing a segfault for debug.\n");
+				*(char *)0x40000000 = 0;
 				warnx("FAILED: data corrupt on page %u", j);
 				bad = true;
 			}

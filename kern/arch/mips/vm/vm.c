@@ -415,7 +415,7 @@ vm_tlb_dump()
  * Inserts a valid page table entry into translation lookaside buffer.
  */
 static void
-vm_tlb_insert(struct pte *pte, vaddr_t vaddr)
+vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 {
 	uint32_t ehi, elo;
 	int spl;
@@ -424,9 +424,9 @@ vm_tlb_insert(struct pte *pte, vaddr_t vaddr)
 	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();
 	ehi = vaddr;
-	elo = (pte->paddr) | TLBLO_VALID;
+	elo = (paddr) | TLBLO_VALID;
 	KASSERT(elo & TLBLO_VALID);
-	DEBUG(DB_VM, "vm_tlb_insert: 0x%x -> 0x%x\n", vaddr, pte->paddr);
+	DEBUG(DB_VM, "vm_tlb_insert: 0x%x -> 0x%x\n", vaddr, paddr);
 	// Check if vaddr already in TLB so we don't duplicate.
 	idx = tlb_probe(ehi, 0);
 	if (idx < 0) {
@@ -493,6 +493,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	read_request = faulttype == VM_FAULT_READ;
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
+		//TODO(aabo): remove
+		//panic("operation is not valid");
 		return EFAULT;
 	}
 	faultaddress &= PAGE_FRAME;
@@ -510,7 +512,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// Find or create a page table entry.
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
-		panic("vm_fault: as_touch_pte failed on vaddr=0x%08x\n", faultaddress);
+		// TODO(aabo): remove.
+		//panic("vm_fault: as_touch_pte failed on vaddr=0x%08x\n", faultaddress);
 		return ENOMEM;
 	}
 	if (!(pte->status & VM_PTE_VALID)) {
@@ -519,13 +522,14 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		// so allocate a new page.
 		pte->paddr = alloc_pages(1, as, faultaddress);
 		if (pte->paddr == (paddr_t)NULL) {
-			panic("vm_fault: alloc_pages failed");
+			// TODO(aabo): remove.
+			//panic("vm_fault: out of memory. alloc_pages failed");
 			return ENOMEM;
 		}
 		pte->status |= VM_PTE_VALID;
 	}
 	/* make sure it's page-aligned */
 	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
-	vm_tlb_insert(pte, faultaddress);
+	vm_tlb_insert(pte->paddr, faultaddress);
 	return 0;
 }

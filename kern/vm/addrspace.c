@@ -35,6 +35,7 @@
 #include <proc.h>
 #include <mips/tlb.h>
 #include <spl.h>
+#include <synch.h>
 
 /*
  * Note! If OPT_DUMBVM is set, as is the case until you start the VM
@@ -54,7 +55,11 @@ as_create(void)
 	if (as == NULL) {
 		return NULL;
 	}
-
+	as->heap_lock = lock_create("heap");
+	if (as->heap_lock == NULL) {
+		kfree(as);
+		return NULL;
+	}
 	as->next_segment = 0;
 	for (int p = 0; p < 1<<VPN_BITS_PER_LEVEL; p++) {
 		as->pages0[p] = NULL;
@@ -172,6 +177,7 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 		dst->segments[s].access = src->segments[s].access;
 	}
 	dst->next_segment = src->next_segment;
+	dst->vheapbase = src->vheapbase;
 	dst->vheaptop = src->vheaptop;
 	result = copy_page_table(dst, src->pages0, 0, (vaddr_t)0x0);
 	if (result) {
@@ -261,6 +267,7 @@ void
 as_destroy(struct addrspace *as)
 {
 	destroy_page_table(as->pages0, 0);
+	lock_destroy(as->heap_lock);
 	kfree(as);
 }
 
@@ -396,6 +403,22 @@ as_define_heap(struct addrspace *as)
 	return 0;
 }
 
+// Prints out addrspace segments for debugging.
+void 
+dump_segments(struct addrspace *as)
+{
+	vaddr_t vbase;
+	size_t size;
+
+    for (int s = 0; s < as->next_segment; s++) {
+		vbase = as->segments[s].vbase;
+		size = as->segments[s].size;
+		kprintf("Segment %d\n", s);
+		kprintf("vbase = 0x%08x\n", vbase);
+		kprintf("vtop  = 0x%08x\n\n", vbase + size);
+	}
+}
+
 /*
  * Returns 1 if address in a valid segment and operation is allowed, else 0.
  *
@@ -424,6 +447,10 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 			return as->segments[s].access & VM_SEGMENT_WRITEABLE ? 1 : 0;
 		}
 	}
+	// Heap is a special segment.
+	if ((vaddr >= as->vheapbase) && (vaddr < as->vheaptop)) {
+		return 1;
+    }
 	return 0;
 }
 
@@ -455,7 +482,7 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
  *  Else errno value if there was a syscall failure.
  */
 static int 
-touch_pte(struct addrspace *as, vaddr_t vaddr, int create, void **tab)
+touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte ***tab)
 {
 	int idx;
 	unsigned vpn;
@@ -469,18 +496,18 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, void **tab)
 	// Walk down to leaf page table.
 	vpn = vaddr >> PAGE_OFFSET_BITS;
 	pages = as->pages0;
+	*tab = NULL;
 	for (level = 0; level < PT_LEVELS - 1; level++) {
         idx = (vpn & mask[level]) >> shift[level];
         next_pages = pages[idx];
         if (next_pages == NULL) {
 			if (!create) {
 				// vaddr not found.
-				*tab = NULL;
 				return 0;
 			}
 			// Allocate and install next level page table.
             next_pages = kmalloc(sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
-            if (next_pages == NULL) {				
+            if (next_pages == NULL) {
                 return ENOMEM;
 			}
 			bzero(next_pages, sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
@@ -493,7 +520,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, void **tab)
 	pte = pages[idx];
 	if (pte == NULL) {
 		if (!create) {
-			*tab = NULL;
+			// vaddr not found.
 			return 0;
 		}
 		pte = kmalloc(sizeof(struct pte));
@@ -504,7 +531,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, void **tab)
         pte->paddr = (paddr_t)NULL;
         pages[idx] = pte;
     }
-	*tab = pages + idx;
+	*tab = (struct pte **)pages + idx;
 	return 0;
 }
 
@@ -523,17 +550,19 @@ struct pte
 *as_touch_pte(struct addrspace *as, vaddr_t vaddr)
 {
 	int result;
-	void *tab;
+	struct pte **tab;
+
 	result = touch_pte(as, vaddr, 1, &tab);
 	if (result) {
 		return NULL;
 	}
-	return *(struct pte **)tab;
+	return *tab;
 }
 
 /*
  * Destroys page table entry corresponding to vaddr and
- * corresponding core page if valid.
+ * corresponding core page if valid.  If page
+ * does not exist return.
  * 
  * Args:
  *   as: Pointer to address space to modify.
@@ -543,16 +572,20 @@ void
 as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 {
 	struct pte *pte;
-	void *tab;
+	struct pte **tab;
 	int result;
 
 	result = touch_pte(as, vaddr, 0, &tab);
 	KASSERT(result == 0);
-	KASSERT(tab != NULL);
-	pte = *(struct pte **)tab;
+	if (tab == NULL) {
+		return;
+	}
 	// Remove pte from table.
-	*(struct pte **)tab = NULL;
-	free_pages(pte->paddr);
+	pte = *tab;
+	*tab = NULL;
+	if (pte->status & VM_PTE_VALID) {
+        free_pages(pte->paddr);
+	}
 	kfree(pte);
 }
 

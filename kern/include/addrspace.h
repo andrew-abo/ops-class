@@ -83,10 +83,11 @@ struct segment {
 #define VM_PTE_VALID 0x1  // Page in memory.
 
 // Page table entry.
+// We don't store the virtual address which is inherently coded in the indices
+// of the multi-level page tables.
 struct pte {
     uint32_t status;
     paddr_t paddr;
-    vaddr_t vaddr;
 };
 
 struct addrspace {
@@ -104,6 +105,7 @@ struct addrspace {
         void *pages0[1<<VPN_BITS_PER_LEVEL];  // Level0 page table.
         vaddr_t vheapbase;  // Starting address of heap.
         vaddr_t vheaptop;  // Current top of heap.
+        struct lock *heap_lock;
 #endif
 };
 
@@ -177,6 +179,7 @@ int load_elf(struct vnode *v, vaddr_t *entrypoint);
 int as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request);
 struct pte *as_touch_pte(struct addrspace *as, vaddr_t vaddr);
 void dump_page_table(struct addrspace *as);
+void dump_segments(struct addrspace *as);
 struct pte *as_create_page(struct addrspace *as, vaddr_t vaddr);
 void as_destroy_page(struct addrspace *as, vaddr_t vaddr);
 
