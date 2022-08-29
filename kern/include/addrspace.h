@@ -55,7 +55,7 @@ struct vnode;
 // however, we make them finite so we can treat heap
 // and stack like any other segment.
 #define USER_STACK_PAGES 1024 // Max size of user stack in pages.
-#define USER_HEAP_PAGES 1024  // Max size of user heap in pages.
+#define USER_HEAP_PAGES 16384  // Max size of user heap in pages.
 
 // Segment permissions.
 #define VM_SEGMENT_READABLE 0x1
@@ -103,6 +103,7 @@ struct addrspace {
         struct segment segments[SEGMENT_MAX];
         int next_segment;  // Next segment index to populate.
         void *pages0[1<<VPN_BITS_PER_LEVEL];  // Level0 page table.
+        struct lock *pages_lock;  // Page table lock.
         vaddr_t vheapbase;  // Starting address of heap.
         vaddr_t vheaptop;  // Current top of heap.
         struct lock *heap_lock;

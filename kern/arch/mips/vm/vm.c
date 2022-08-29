@@ -97,9 +97,30 @@ paddr_to_core_idx(paddr_t paddr)
 }
 
 /*
+ * Invalidate one entries in TLB.
+ *
+ */
+static void 
+vm_tlb_remove(vaddr_t vaddr)
+{
+	uint32_t ehi;
+	int spl;
+	int idx;
+
+	/* Disable interrupts on this CPU while frobbing the TLB. */
+	spl = splhigh();
+	ehi = vaddr;
+	idx = tlb_probe(ehi, 0);
+	if (idx >= 0) {
+        tlb_write(TLBHI_INVALID(idx), TLBLO_INVALID(), idx);
+	}
+	splx(spl);
+}
+
+/*
  * Invalidates all entries in TLB.
  *
-  */
+ */
 void 
 vm_tlb_erase()
 {
@@ -120,13 +141,21 @@ void
 free_pages(paddr_t paddr)
 {
     unsigned p;
+	unsigned npages;
+	vaddr_t vaddr;
 
 	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
 	spinlock_acquire(&coremap_lock);
 	KASSERT(coremap[p].status & VM_CORE_USED);
+	npages = get_core_npages(p);
+	vaddr = coremap[p].vaddr;
+	for (unsigned i = 0; i < npages; i++) {
+        vm_tlb_remove(vaddr);
+		vaddr += PAGE_SIZE;
+	}
 	coremap[p].status &= ~VM_CORE_USED;
-	used_bytes -= get_core_npages(p) * PAGE_SIZE;
+	used_bytes -= npages * PAGE_SIZE;
 	spinlock_release(&coremap_lock);
 }
 
@@ -493,8 +522,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	read_request = faulttype == VM_FAULT_READ;
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
-		//TODO(aabo): remove
-		//panic("operation is not valid");
+		// TODO(aabo): remove
+		panic("operation not valid");
 		return EFAULT;
 	}
 	faultaddress &= PAGE_FRAME;
@@ -510,10 +539,12 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		// Page is no longer in TLB.
 	}
 	// Find or create a page table entry.
+	lock_acquire(as->pages_lock);
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
 		// TODO(aabo): remove.
-		//panic("vm_fault: as_touch_pte failed on vaddr=0x%08x\n", faultaddress);
+		panic("vm_fault: as_touch_pte failed on vaddr=0x%08x\n", faultaddress);
+		lock_release(as->pages_lock);
 		return ENOMEM;
 	}
 	if (!(pte->status & VM_PTE_VALID)) {
@@ -522,8 +553,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		// so allocate a new page.
 		pte->paddr = alloc_pages(1, as, faultaddress);
 		if (pte->paddr == (paddr_t)NULL) {
-			// TODO(aabo): remove.
-			//panic("vm_fault: out of memory. alloc_pages failed");
+			lock_release(as->pages_lock);
+			// TODO(aabo): remove
+			panic("alloc_pages failed.");
 			return ENOMEM;
 		}
 		pte->status |= VM_PTE_VALID;
@@ -531,5 +563,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	/* make sure it's page-aligned */
 	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
 	vm_tlb_insert(pte->paddr, faultaddress);
+	lock_release(as->pages_lock);
 	return 0;
 }

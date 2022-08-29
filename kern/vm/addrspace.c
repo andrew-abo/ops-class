@@ -55,8 +55,14 @@ as_create(void)
 	if (as == NULL) {
 		return NULL;
 	}
+	as->pages_lock = lock_create("pages");
+	if (as->pages_lock == NULL) {
+		kfree(as);
+		return NULL;
+	}
 	as->heap_lock = lock_create("heap");
 	if (as->heap_lock == NULL) {
+		lock_destroy(as->pages_lock);
 		kfree(as);
 		return NULL;
 	}
@@ -92,9 +98,11 @@ struct pte
     if (paddr == (paddr_t)NULL) {
         return NULL;
     }
+	lock_acquire(as->pages_lock);
     pte = as_touch_pte(as, vaddr);
     if (pte == NULL) {
 		free_pages(paddr);
+		lock_release(as->pages_lock);
         return NULL;
     }
 	// Page must not already exist.
@@ -103,6 +111,7 @@ struct pte
 	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
+	lock_release(as->pages_lock);
     return pte;
 }
 
@@ -181,7 +190,9 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	dst->vheapbase = src->vheapbase;
 	dst->vheaptop = src->vheaptop;
 	lock_release(src->heap_lock);
+	lock_acquire(src->pages_lock);
 	result = copy_page_table(dst, src->pages0, 0, (vaddr_t)0x0);
+	lock_release(src->pages_lock);
 	if (result) {
 		as_destroy(dst);
 		return result;
@@ -222,7 +233,9 @@ visit_page_table(void **pages, int level, vaddr_t vpn)
 void
 dump_page_table(struct addrspace *as)
 {
+	lock_acquire(as->pages_lock);
     visit_page_table(as->pages0, 0, 0x0);
+	lock_release(as->pages_lock);
 }
 
 /*
@@ -269,6 +282,7 @@ void
 as_destroy(struct addrspace *as)
 {
 	destroy_page_table(as->pages0, 0);
+	lock_destroy(as->pages_lock);
 	lock_destroy(as->heap_lock);
 	kfree(as);
 }
@@ -543,7 +557,9 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte ***tab)
 
 /*
  * Look up an existing page table entry or create if does not exist.
-  *  
+ * 
+ * Caller is responsible for locking as->pages_lock.
+ *  
  * Args:
  *   as: Pointer to addrspace.
  *   vaddr: Virtual address to find.
@@ -581,9 +597,11 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 	struct pte **tab;
 	int result;
 
+	lock_acquire(as->pages_lock);
 	result = touch_pte(as, vaddr, 0, &tab);
 	KASSERT(result == 0);
 	if (tab == NULL) {
+		lock_release(as->pages_lock);
 		return;
 	}
 	// Remove pte from table.
@@ -593,5 +611,6 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
         free_pages(pte->paddr);
 	}
 	kfree(pte);
+	lock_release(as->pages_lock);
 }
 

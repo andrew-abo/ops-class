@@ -22,7 +22,7 @@ int sys_sbrk(intptr_t amount, void **mem)
 	struct addrspace *as;
 	unsigned abs_amount;
 	vaddr_t vaddr;
-	vaddr_t newheaptop;
+	intptr_t newheaptop;
 
 	// For simplicity we require amount be an integer number of pages.
 	abs_amount = amount >= 0 ? amount : -amount;
@@ -39,29 +39,24 @@ int sys_sbrk(intptr_t amount, void **mem)
 	KASSERT(as->vheapbase > 0);
 	KASSERT(as->vheaptop >= as->vheapbase);
 	*mem = (void *)(as->vheaptop);
-	newheaptop = as->vheaptop + amount;
+	newheaptop = (long int)(as->vheaptop) + amount;
 	if (amount >= 0) {
-		if ((newheaptop - as->vheapbase) / PAGE_SIZE > USER_HEAP_PAGES) {
+		if ((newheaptop - (long int)(as->vheapbase)) / PAGE_SIZE > USER_HEAP_PAGES) {
             lock_release(as->heap_lock);
 			return ENOMEM;
 		}
-		as->vheaptop = newheaptop;
+		as->vheaptop = (vaddr_t)newheaptop;
 		lock_release(as->heap_lock);
 		return 0;
 	}
-	//kprintf("sys_sbrk: as = %p\n", as);
-	//kprintf("sys_sbrk: vheapbase   = 0x%08x\n", as->vheapbase);
-	//kprintf("sys_sbrk: vheaptop    = 0x%08x\n", as->vheaptop);
-	//kprintf("sys_sbrk: newheaptop  = 0x%08x\n", newheaptop);
-	if (newheaptop < as->vheapbase) {
+	if (newheaptop < (long int)(as->vheapbase)) {
 		lock_release(as->heap_lock);
 		return EINVAL;
 	}
-	for (vaddr = newheaptop; vaddr < as->vheaptop; vaddr += PAGE_SIZE) {
-		//kprintf("sys_sbrk: destroy 0x%08x\n", vaddr);
+	for (vaddr = (vaddr_t)newheaptop; vaddr < as->vheaptop; vaddr += PAGE_SIZE) {
 		as_destroy_page(as, vaddr);
 	}
-	as->vheaptop = newheaptop;
+	as->vheaptop = (vaddr_t)newheaptop;
 	lock_release(as->heap_lock);
 	return 0;
 }
