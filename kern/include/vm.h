@@ -55,6 +55,7 @@ struct core_page {
     uint32_t status;  // See bit masks above.
     vaddr_t vaddr;    // Virtual address where this page starts.
     struct addrspace *as;    // Pointer to address space this page belongs to.
+    unsigned prev;  // Index of previous block in coremap.
 };
 
 // Initializes physical memory map to enable kmalloc.

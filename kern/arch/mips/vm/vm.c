@@ -222,8 +222,11 @@ vm_init_coremap()
 	// Mark kernel and coremap pages as allocated in coremap.
 	p = paddr_to_core_idx(firstpaddr);
 	coremap[0].status = set_core_status(1, 0, 0, p);
+	coremap[0].prev = 0;
 	// Mark remainder of pages as free.
+	KASSERT(p < page_max);
 	coremap[p].status = set_core_status(0, 0, 0, page_max - p);
+	coremap[p].prev = 0;
 	next_fit = p;
 	// Includes kernel and coremap in used_bytes.
 	used_bytes = p * PAGE_SIZE;
@@ -293,6 +296,8 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	vaddr_t vaddr_direct;
     unsigned p;  // Page index into coremap.
 	unsigned block_pages;
+	unsigned prev;
+	unsigned next;
 
 	spinlock_acquire(&coremap_lock);
 	p = next_fit;
@@ -324,10 +329,16 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		KASSERT(npages == 1);
 		coremap[p].vaddr = vaddr;
 	}
+	prev = p;
 	p = (p + npages) % page_max;
 	if (block_pages > npages) {
 		// Split out remaining block of pages.
 		coremap[p].status = set_core_status(0, 0, 0, block_pages - npages);
+		coremap[p].prev = prev;
+		next = prev + block_pages;
+		if (next < page_max) {
+            coremap[next].prev = p;
+		}
 	}
 	next_fit = p;
 	used_bytes += npages * PAGE_SIZE;
@@ -358,6 +369,7 @@ free_pages(paddr_t paddr)
     unsigned p;
 	unsigned npages;
 	unsigned next;
+	//unsigned prev;
 	vaddr_t vaddr;
 
 	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
@@ -372,8 +384,8 @@ free_pages(paddr_t paddr)
 	}
 	coremap[p].status &= ~VM_CORE_USED;
 	used_bytes -= npages * PAGE_SIZE;
+
 	// Attempt to coalesce next block.
-	// Does not work well if pages are freed in ascending order.
 	next = p + npages;
 	if ((next < page_max) && !(coremap[next].status & VM_CORE_USED)) {
 		npages += get_core_npages(next);
@@ -384,7 +396,29 @@ free_pages(paddr_t paddr)
 		if (next_fit == next) {
 			next_fit = p;
 		}
+		next = p + npages;
+		if (next < page_max) {
+            coremap[next].prev = p;
+		}
 	}
+
+/*
+	// Attempt to coalesce previous block.
+	prev = coremap[p].prev;
+	if (!(coremap[prev].status & VM_CORE_USED)) {
+        npages += get_core_npages(prev);
+		KASSERT(npages <= VM_CORE_NPAGES);
+        coremap[prev].status &= ~VM_CORE_NPAGES;
+		coremap[prev].status |= npages & VM_CORE_NPAGES;
+		// If next_fit was on the coalesced block, move to new head of block.
+		if (next_fit == p) {
+			next_fit = prev;
+		}
+		if (next < page_max) {
+            coremap[next].prev = prev;
+		}
+	}
+*/
 	spinlock_release(&coremap_lock);
 }
 
