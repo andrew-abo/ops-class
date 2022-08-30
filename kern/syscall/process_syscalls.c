@@ -529,5 +529,5 @@ int sys_getpid(pid_t *pid)
 void
 sys___getlogin()
 {
-    proclist_print();
+    lock_and_dump_coremap();
 }

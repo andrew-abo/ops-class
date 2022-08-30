@@ -62,19 +62,29 @@ static unsigned set_core_status(int used, int accessed, int dirty, unsigned npag
            (npages & VM_CORE_NPAGES);
 }
 
-void dump_coremap()
+/*
+ * Print contents of coremap for deubbing.
+ * Caller is responsible for locking coremap.
+ */
+static void 
+dump_coremap()
 {
 	unsigned p;
 	unsigned npages;
 	unsigned status;
 
-	spinlock_acquire(&coremap_lock);
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
 		kprintf("coremap[%3u]: status=0x%08x, vaddr=0x%08x, npages=%u\n", p, status, 
 		  coremap[p].vaddr, npages);
 	}
+}
+
+void lock_and_dump_coremap()
+{
+    spinlock_acquire(&coremap_lock);
+	dump_coremap();
 	spinlock_release(&coremap_lock);
 }
 
@@ -97,7 +107,7 @@ paddr_to_core_idx(paddr_t paddr)
 }
 
 /*
- * Invalidate one entries in TLB.
+ * Invalidates one entry in TLB.
  *
  */
 static void 
@@ -135,31 +145,6 @@ vm_tlb_erase()
 }
 
 /*
- * Frees block of pages starting at paddr from coremap.
- */
-void
-free_pages(paddr_t paddr)
-{
-    unsigned p;
-	unsigned npages;
-	vaddr_t vaddr;
-
-	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
-	p = paddr_to_core_idx(paddr);
-	spinlock_acquire(&coremap_lock);
-	KASSERT(coremap[p].status & VM_CORE_USED);
-	npages = get_core_npages(p);
-	vaddr = coremap[p].vaddr;
-	for (unsigned i = 0; i < npages; i++) {
-        vm_tlb_remove(vaddr);
-		vaddr += PAGE_SIZE;
-	}
-	coremap[p].status &= ~VM_CORE_USED;
-	used_bytes -= npages * PAGE_SIZE;
-	spinlock_release(&coremap_lock);
-}
-
-/*
  * Debug check to confirm coremap is valid.
  * Caller is responsible for locking coremap.
  */
@@ -185,13 +170,17 @@ validate_coremap()
 	if (used_pages * PAGE_SIZE != used_bytes) {
 		kprintf("used_pages = %u\n", used_pages);
 		kprintf("used_bytes = %u\n", used_bytes);
-		panic("used_pages * PAGE_SIZE != used_bytes");
+		dump_coremap();
+		panic("used_pages * PAGE_SIZE (%u) != used_bytes (%u)",
+		  used_pages * PAGE_SIZE, used_bytes);
 	}
 	if (used_pages + free_pages != page_max) {
 		kprintf("used_pages = %u\n", used_pages);
 		kprintf("free_pages = %u\n", free_pages);
 		kprintf("page_max = %u\n", page_max);
-		panic("used_pages + free_pages != page_max");
+		dump_coremap();
+		panic("used_pages + free_pages (%u) != page_max (%u)",
+		  used_pages + free_pages, page_max);
 	}
 }
 
@@ -360,6 +349,45 @@ free_kpages(vaddr_t vaddr)
 	free_pages(paddr);
 }
 
+/*
+ * Frees block of pages starting at paddr from coremap.
+ */
+void
+free_pages(paddr_t paddr)
+{
+    unsigned p;
+	unsigned npages;
+	unsigned next;
+	vaddr_t vaddr;
+
+	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
+	p = paddr_to_core_idx(paddr);
+	spinlock_acquire(&coremap_lock);
+	KASSERT(coremap[p].status & VM_CORE_USED);
+	npages = get_core_npages(p);
+	vaddr = coremap[p].vaddr;
+	for (unsigned i = 0; i < npages; i++) {
+        vm_tlb_remove(vaddr);
+		vaddr += PAGE_SIZE;
+	}
+	coremap[p].status &= ~VM_CORE_USED;
+	used_bytes -= npages * PAGE_SIZE;
+	// Attempt to coalesce next block.
+	// Does not work well if pages are freed in ascending order.
+	next = p + npages;
+	if ((next < page_max) && !(coremap[next].status & VM_CORE_USED)) {
+		npages += get_core_npages(next);
+		KASSERT(npages <= VM_CORE_NPAGES);
+        coremap[p].status &= ~VM_CORE_NPAGES;
+		coremap[p].status |= npages & VM_CORE_NPAGES;
+		// If next_fit was on the coalesced block, move to new head of block.
+		if (next_fit == next) {
+			next_fit = p;
+		}
+	}
+	spinlock_release(&coremap_lock);
+}
+
 unsigned
 int
 coremap_used_bytes() {
@@ -522,8 +550,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	read_request = faulttype == VM_FAULT_READ;
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
-		// TODO(aabo): remove
-		panic("operation not valid");
 		return EFAULT;
 	}
 	faultaddress &= PAGE_FRAME;
@@ -542,8 +568,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	lock_acquire(as->pages_lock);
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
-		// TODO(aabo): remove.
-		panic("vm_fault: as_touch_pte failed on vaddr=0x%08x\n", faultaddress);
 		lock_release(as->pages_lock);
 		return ENOMEM;
 	}
@@ -554,8 +578,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		pte->paddr = alloc_pages(1, as, faultaddress);
 		if (pte->paddr == (paddr_t)NULL) {
 			lock_release(as->pages_lock);
-			// TODO(aabo): remove
-			panic("alloc_pages failed.");
 			return ENOMEM;
 		}
 		pte->status |= VM_PTE_VALID;

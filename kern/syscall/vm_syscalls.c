@@ -20,13 +20,13 @@
 int sys_sbrk(intptr_t amount, void **mem)
 {
 	struct addrspace *as;
-	unsigned abs_amount;
+	long unsigned abs_amount;
 	vaddr_t vaddr;
 	intptr_t newheaptop;
 
 	// For simplicity we require amount be an integer number of pages.
 	abs_amount = amount >= 0 ? amount : -amount;
-	if ((abs_amount & PAGE_FRAME) != abs_amount) {
+	if ((abs_amount / PAGE_SIZE) * PAGE_SIZE != abs_amount) {
 		return EINVAL;
 	}
 	as = proc_getas();
@@ -41,7 +41,7 @@ int sys_sbrk(intptr_t amount, void **mem)
 	*mem = (void *)(as->vheaptop);
 	newheaptop = (long int)(as->vheaptop) + amount;
 	if (amount >= 0) {
-		if ((newheaptop - (long int)(as->vheapbase)) / PAGE_SIZE > USER_HEAP_PAGES) {
+		if ((newheaptop - (intptr_t)(as->vheapbase)) / PAGE_SIZE > USER_HEAP_PAGES) {
             lock_release(as->heap_lock);
 			return ENOMEM;
 		}
@@ -49,7 +49,8 @@ int sys_sbrk(intptr_t amount, void **mem)
 		lock_release(as->heap_lock);
 		return 0;
 	}
-	if (newheaptop < (long int)(as->vheapbase)) {
+	// Negative amount (freeing memory).
+	if (newheaptop < (intptr_t)(as->vheapbase)) {
 		lock_release(as->heap_lock);
 		return EINVAL;
 	}
