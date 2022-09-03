@@ -207,12 +207,14 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     }
 
     spinlock_acquire(&child->p_lock);
+
     if (spinlock_do_i_hold(&parent->p_lock)) {
         // We are attempting to wait for ourself so abort.
         KASSERT(parent->pid == child->pid);
         spinlock_release(&parent->p_lock);
         return ECHILD;
     }
+
     spinlock_acquire(&parent->p_lock);
     if (child->ppid != parent->pid) {
         spinlock_release(&parent->p_lock);
@@ -220,6 +222,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
         return ECHILD;
     }
     spinlock_release(&parent->p_lock);
+
     if (child->p_state != S_ZOMBIE) {
         spinlock_release(&child->p_lock);
         lock_acquire(child->waitpid_lock);
@@ -227,13 +230,14 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
         lock_release(child->waitpid_lock);
         spinlock_acquire(&child->p_lock);
     }
+    KASSERT(child->p_state == S_ZOMBIE);
     child_status = child->exit_status;
+
     spinlock_release(&child->p_lock);
 
     // TODO(aabo): Looking through the linked list above and here is
     // inefficient.  A doubly-linked list would eliminate need for two lookups.
     proclist_remove(pid);
-
     proc_destroy(child);
     if (status != NULL) {
         result = copyout(&child_status, status, sizeof(int));

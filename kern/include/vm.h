@@ -73,7 +73,7 @@ vaddr_t alloc_kpages(unsigned npages);
 void free_kpages(vaddr_t vaddr);
 
 /* Allocate/free coremap pages */
-vaddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
+paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
 void free_pages(vaddr_t vaddr);
 void vm_tlb_erase(void);
 

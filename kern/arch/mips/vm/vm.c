@@ -117,9 +117,8 @@ vm_tlb_remove(vaddr_t vaddr)
 	int spl;
 	int idx;
 
-	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();
-	ehi = vaddr;
+	ehi = vaddr & PAGE_FRAME;
 	idx = tlb_probe(ehi, 0);
 	if (idx >= 0) {
         tlb_write(TLBHI_INVALID(idx), TLBLO_INVALID(), idx);
@@ -158,10 +157,19 @@ validate_coremap()
     unsigned status;
 
 	for (p = 0; p < page_max;) {
+		if (p > 0) {
+			KASSERT(coremap[p].prev == p - npages);
+		}
 		npages = get_core_npages(p);
 		status = coremap[p].status;
         if (status & VM_CORE_USED) {
 			used_pages += npages;
+			if (coremap[p].as == NULL) {
+                KASSERT(coremap[p].vaddr >= MIPS_KSEG0);
+                KASSERT(coremap[p].vaddr < MIPS_KSEG1);
+            } else {
+                KASSERT(coremap[p].vaddr < MIPS_KSEG0);
+            }
 		} else {
 			free_pages += npages;
 		}
@@ -171,7 +179,7 @@ validate_coremap()
 		kprintf("used_pages = %u\n", used_pages);
 		kprintf("used_bytes = %u\n", used_bytes);
 		dump_coremap();
-		panic("used_pages * PAGE_SIZE (%u) != used_bytes (%u)",
+		panic("(used_pages * PAGE_SIZE) (%u) != used_bytes (%u)",
 		  used_pages * PAGE_SIZE, used_bytes);
 	}
 	if (used_pages + free_pages != page_max) {
@@ -179,7 +187,7 @@ validate_coremap()
 		kprintf("free_pages = %u\n", free_pages);
 		kprintf("page_max = %u\n", page_max);
 		dump_coremap();
-		panic("used_pages + free_pages (%u) != page_max (%u)",
+		panic("(used_pages + free_pages) (%u) != page_max (%u)",
 		  used_pages + free_pages, page_max);
 	}
 }
@@ -222,6 +230,8 @@ vm_init_coremap()
 	// Mark kernel and coremap pages as allocated in coremap.
 	p = paddr_to_core_idx(firstpaddr);
 	coremap[0].status = set_core_status(1, 0, 0, p);
+	coremap[0].as = NULL;
+	coremap[0].vaddr = (vaddr_t)MIPS_KSEG0;
 	coremap[0].prev = 0;
 	// Mark remainder of pages as free.
 	KASSERT(p < page_max);
@@ -290,7 +300,8 @@ alloc_kpages(unsigned npages)
  * Returns:
  *   Physical address of first page on success, else 0.
  */
-paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
+paddr_t 
+alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 {
 	paddr_t paddr;
 	vaddr_t vaddr_direct;
@@ -299,7 +310,10 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	unsigned prev;
 	unsigned next;
 
+	KASSERT(npages > 0);
+
 	spinlock_acquire(&coremap_lock);
+
 	p = next_fit;
 	KASSERT(p < page_max);
 	block_pages = get_core_npages(p);
@@ -314,13 +328,15 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	}
 	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
-	KASSERT(paddr >= firstpaddr);  // Don't overwrite kernel.
+	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	vaddr_direct = PADDR_TO_KVADDR(paddr);
 	bzero((void *)vaddr_direct, npages * PAGE_SIZE);
+	used_bytes += npages * PAGE_SIZE;
 	coremap[p].status = set_core_status(1, 0, 0, npages);
 	coremap[p].as = as;
 	if ((as == NULL) || (vaddr == (vaddr_t)NULL)) {
-		// Kernel page.
+		// Kernel pages don't have an addrsapce.
+		// Pages are direct mapped w/o TLB.
         coremap[p].vaddr = vaddr_direct;
 	} else {
 		// Userspace page.
@@ -329,11 +345,17 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		KASSERT(npages == 1);
 		coremap[p].vaddr = vaddr;
 	}
+
+	// Split out remaining free pages if any as a new block.
 	prev = p;
-	p = (p + npages) % page_max;
-	if (block_pages > npages) {
-		// Split out remaining block of pages.
+	p += npages;
+	KASSERT(p <= page_max);
+	if (p == page_max) {
+		p = 0;
+	} else if (block_pages > npages) {
 		coremap[p].status = set_core_status(0, 0, 0, block_pages - npages);
+		coremap[p].as = NULL;
+		coremap[p].vaddr = (vaddr_t)NULL;
 		coremap[p].prev = prev;
 		next = prev + block_pages;
 		if (next < page_max) {
@@ -341,11 +363,33 @@ paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		}
 	}
 	next_fit = p;
-	used_bytes += npages * PAGE_SIZE;
 	validate_coremap();
+
 	spinlock_release(&coremap_lock);
+
+	
+
 	return paddr;
 }
+
+/*
+ * Fill a block with 0xcafebadd.
+ *
+ * Assists with dangling pointer detection (aka poisoning).
+ */
+/*
+static
+void
+fill_deadbeef(void *vptr, size_t len)
+{
+	uint32_t *ptr = vptr;
+	size_t i;
+
+	for (i=0; i<len/sizeof(uint32_t); i++) {
+		ptr[i] = 0xdeadbeef;
+	}
+}
+*/
 
 /*
  * Frees a block of kernel pages starting at vaddr.
@@ -369,12 +413,15 @@ free_pages(paddr_t paddr)
     unsigned p;
 	unsigned npages;
 	unsigned next;
-	//unsigned prev;
+	unsigned prev;
 	vaddr_t vaddr;
 
-	KASSERT((paddr > firstpaddr) && (paddr < lastpaddr));
+	KASSERT((paddr >= firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
+
 	spinlock_acquire(&coremap_lock);
+
+	// Free this block.
 	KASSERT(coremap[p].status & VM_CORE_USED);
 	npages = get_core_npages(p);
 	vaddr = coremap[p].vaddr;
@@ -383,6 +430,8 @@ free_pages(paddr_t paddr)
 		vaddr += PAGE_SIZE;
 	}
 	coremap[p].status &= ~VM_CORE_USED;
+	coremap[p].vaddr = (vaddr_t)NULL;
+	coremap[p].as = NULL;
 	used_bytes -= npages * PAGE_SIZE;
 
 	// Attempt to coalesce next block.
@@ -392,6 +441,8 @@ free_pages(paddr_t paddr)
 		KASSERT(npages <= VM_CORE_NPAGES);
         coremap[p].status &= ~VM_CORE_NPAGES;
 		coremap[p].status |= npages & VM_CORE_NPAGES;
+		coremap[p].vaddr = (vaddr_t)NULL;
+		coremap[p].as = NULL;
 		// If next_fit was on the coalesced block, move to new head of block.
 		if (next_fit == next) {
 			next_fit = p;
@@ -402,7 +453,6 @@ free_pages(paddr_t paddr)
 		}
 	}
 
-/*
 	// Attempt to coalesce previous block.
 	prev = coremap[p].prev;
 	if (!(coremap[prev].status & VM_CORE_USED)) {
@@ -418,7 +468,8 @@ free_pages(paddr_t paddr)
             coremap[next].prev = prev;
 		}
 	}
-*/
+	validate_coremap();
+
 	spinlock_release(&coremap_lock);
 }
 
@@ -456,8 +507,9 @@ flag_page_as_dirty(vaddr_t vaddr)
 	uint32_t entryhi, entrylo;
 
 	spinlock_acquire(&coremap_lock);
+
 	spl = splhigh();
-	tlb_idx = tlb_probe(vaddr, 0);
+	tlb_idx = tlb_probe(vaddr & PAGE_FRAME, 0);
 	if (tlb_idx < 0) {
         splx(spl);
         spinlock_release(&coremap_lock);
@@ -470,6 +522,7 @@ flag_page_as_dirty(vaddr_t vaddr)
     p = paddr_to_core_idx(paddr);
     coremap[p].status |= VM_CORE_DIRTY;
     splx(spl);
+
     spinlock_release(&coremap_lock);
     return 0;
 }
@@ -514,7 +567,7 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 
 	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();
-	ehi = vaddr;
+	ehi = vaddr & PAGE_FRAME;
 	elo = (paddr) | TLBLO_VALID;
 	KASSERT(elo & TLBLO_VALID);
 	DEBUG(DB_VM, "vm_tlb_insert: 0x%x -> 0x%x\n", vaddr, paddr);
@@ -549,7 +602,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// behave unexpectedly.
 
 	// TLB faults should only occur in KUSEG.
-	KASSERT(faultaddress <= MIPS_KSEG0);
+	KASSERT(faultaddress < MIPS_KSEG0);
 	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 
 	switch (faulttype) {

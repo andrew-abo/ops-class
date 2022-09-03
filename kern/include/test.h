@@ -140,6 +140,10 @@ int addrspacetest7(int, char **);
 int addrspacetest8(int, char **);
 int addrspacetest9(int, char **);
 int nettest(int, char **);
+int vmtest1(int, char **);
+int vmtest2(int, char **);
+int vmtest3(int, char **);
+int vmtest4(int, char **);
 
 /* Routine for running a user-level program. */
 int runprogram(char *progname);

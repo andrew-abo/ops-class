@@ -52,36 +52,37 @@ proctest2(int nargs, char **args)
 
 	struct proc *newproc[NEWPROCS];
 	struct proc *p;
+	pid_t pids[NEWPROCS];
 	int i;
 	int result;
 
 	// Test creating a sequential list of pids.
 	for (i = 0; i < NEWPROCS; i++) {
 		newproc[i] = proc_create("new");
+		newproc[i]->pid = new_pid();
+		pids[i] = newproc[i]->pid;
 		KASSERT(newproc[i] != NULL);
 		result = proclist_insert(newproc[i]);
 		KASSERT(result == 0);
-		KASSERT(newproc[i]->pid == i + 1);
 	}
 
 	// Delete one pid in the middle.
-	i = 2;
-	p = proclist_remove(i + 1);
+	p = proclist_remove(pids[2]);
 	KASSERT(p != NULL);
 	proc_destroy(p);
 
-	// Insert into the gap.
 	p = proc_create("new");
 	KASSERT(p != NULL);
 	result = proclist_insert(p);
 	KASSERT(result == 0);
-	KASSERT(p->pid == i + 1);
 	
 	// Delete all the procs.
 	for (i = 0; i < NEWPROCS; i++) {
-		p = proclist_remove(i + 1);
-		KASSERT(p != NULL);
-		proc_destroy(p);
+		p = proclist_remove(pids[i]);
+		if (i != 2) {
+            KASSERT(p != NULL);
+            proc_destroy(p);
+		}
 	}
 
 	kprintf_t("\n");
@@ -97,21 +98,20 @@ proctest3(int nargs, char **args)
 	(void)nargs;
 	(void)args;
 	int i;
-	pid_t pid;
+	pid_t pid, prev;
 
+	prev = 0;
 	for (i = 0; i < 10; i++) {
         pid = new_pid();
+		KASSERT(pid > prev);
+		prev = pid;
 	}
-	KASSERT(pid == 11);
 
 	// Exhaust pids.
-	for (i = 12; i <= PID_MAX; i++) {
+	for (i = 0; i <= PID_MAX; i++) {
 		pid = new_pid();
 	}
-	KASSERT(pid == PID_MAX);
-
 	// No more PIDs left.
-	pid = new_pid();
 	KASSERT(pid == 0);
 
 	success(TEST161_SUCCESS, SECRET, "proc3");
