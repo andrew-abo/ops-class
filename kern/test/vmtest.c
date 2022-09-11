@@ -5,17 +5,15 @@
 
 #include <types.h>
 #include <lib.h>
-//#include <clock.h>
-//#include <thread.h>
-//#include <proc.h>
 #include <test.h>
 #include <kern/test161.h>
-//#include <spinlock.h>
 #include <vm.h>
 
-#define BLOCKS 32768
+// CAUTION: if local array exceeds PAGE_SIZE bytes the kernel stack
+// will overflow into the kernel code segment.
+#define BLOCKS 512
 
-// Tests core pages can be allocated and freed.
+// Tests core pages can be allocated and freed in descending order.
 int
 vmtest1(int nargs, char **args)
 {
@@ -35,6 +33,7 @@ vmtest1(int nargs, char **args)
         for (i = 0; i < BLOCKS; i++) {
             paddr[i] = alloc_pages(block_size, NULL, (vaddr_t)NULL);
             if (paddr[i] == (paddr_t)NULL) {
+				kprintf("Attempt to exhaust memory successful.\n");
                 break;
             }
         }
@@ -47,6 +46,12 @@ vmtest1(int nargs, char **args)
         for (int j = i; j >= 0; j--) {
             free_pages(paddr[j]);
         }
+
+        // Should be at least one free page now.
+		paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+		KASSERT(paddr[0] != (paddr_t)NULL);
+		free_pages(paddr[0]);
+
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
 	kprintf_t("\n");
@@ -54,6 +59,7 @@ vmtest1(int nargs, char **args)
 	return 0;
 }
 
+// Tests core pages can be allocated and freed in ascending order.
 int
 vmtest2(int nargs, char **args)
 {
@@ -73,6 +79,7 @@ vmtest2(int nargs, char **args)
         for (i = 0; i < BLOCKS; i++) {
             paddr[i] = alloc_pages(block_size, NULL, (vaddr_t)NULL);
             if (paddr[i] == (paddr_t)NULL) {
+				kprintf("Attempt to exhaust memory successful.\n");
                 break;
             }
         }
@@ -85,6 +92,11 @@ vmtest2(int nargs, char **args)
         for (int j = 0; j <= i; j++) {
             free_pages(paddr[j]);
         }
+        // Should be at least one free page now.
+		paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+		KASSERT(paddr[0] != (paddr_t)NULL);
+		free_pages(paddr[0]);
+
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
 	kprintf_t("\n");
@@ -92,6 +104,7 @@ vmtest2(int nargs, char **args)
 	return 0;
 }
 
+// Tests blocks can be allocated in random sizes and freed in descending order.
 int
 vmtest3(int nargs, char **args)
 {
@@ -126,14 +139,20 @@ vmtest3(int nargs, char **args)
 	for (int j = i; j >= 0; j--) {
 		free_pages(paddr[j]);
     }
-    KASSERT(coremap_used_bytes() == used_bytes0);
 
+    // Should be at least one free page now.
+    paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+    KASSERT(paddr[0] != (paddr_t)NULL);
+    free_pages(paddr[0]);
+    
+    KASSERT(coremap_used_bytes() == used_bytes0);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm3");
 	return 0;
 }
 
+// Tests blocks can be allocated in random sizes and freed in ascending order.
 int
 vmtest4(int nargs, char **args)
 {
@@ -168,8 +187,13 @@ vmtest4(int nargs, char **args)
 	for (int j = 0; j <= i; j++) {
 		free_pages(paddr[j]);
     }
-    KASSERT(coremap_used_bytes() == used_bytes0);
 
+    // Should be at least one free page now.
+    paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+    KASSERT(paddr[0] != (paddr_t)NULL);
+    free_pages(paddr[0]);
+
+    KASSERT(coremap_used_bytes() == used_bytes0);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm4");

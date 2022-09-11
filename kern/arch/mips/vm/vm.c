@@ -39,12 +39,16 @@
 #include <addrspace.h>
 #include <vm.h>
 
+// Dummy value to help detect kernel stack overflow.
+#define STACK_CANARY 0xbaddcafe
+
 static struct spinlock coremap_lock;
 
 // Acquire coremap_lock before accessing any of these shared variables.
 static paddr_t firstpaddr;  // First byte that can be allocated.
 static paddr_t lastpaddr;   // Last byte that can be allocated.
 static struct core_page *coremap;
+static uint32_t *kernel_stack_bottom;  // Pointer to bottom of kernel stack.
 static unsigned used_bytes;
 static unsigned page_max;  // Total number of allocatable pages.
 static unsigned next_fit;  // Coremap index to resume free page search.
@@ -146,8 +150,11 @@ vm_tlb_erase()
 /*
  * Debug check to confirm coremap is valid.
  * Caller is responsible for locking coremap.
+ * 
+ * Returns:
+ *   0 if coremap is valid, else panics.
  */
-static void
+static int
 validate_coremap()
 {
 	unsigned p;
@@ -156,6 +163,7 @@ validate_coremap()
 	unsigned npages;
     unsigned status;
 
+    KASSERT(next_fit < page_max);
 	for (p = 0; p < page_max;) {
 		if (p > 0) {
 			KASSERT(coremap[p].prev == p - npages);
@@ -165,9 +173,11 @@ validate_coremap()
         if (status & VM_CORE_USED) {
 			used_pages += npages;
 			if (coremap[p].as == NULL) {
+				// Kernel page.
                 KASSERT(coremap[p].vaddr >= MIPS_KSEG0);
                 KASSERT(coremap[p].vaddr < MIPS_KSEG1);
             } else {
+				// User page.
                 KASSERT(coremap[p].vaddr < MIPS_KSEG0);
             }
 		} else {
@@ -190,6 +200,8 @@ validate_coremap()
 		panic("(used_pages + free_pages) (%u) != page_max (%u)",
 		  used_pages + free_pages, page_max);
 	}
+	KASSERT(*kernel_stack_bottom == STACK_CANARY);
+	return 0;
 }
 
 /*
@@ -224,8 +236,11 @@ vm_init_coremap()
 	firstpaddr = (firstpaddr + PAGE_SIZE - 1) & PAGE_FRAME;
 
 	// From this point, we will be accessing coremap directly, so
-	// convert to a virtual address and zero out.
+	// convert to a direct mapped virtual address and zero out.
 	coremap = (struct core_page *)PADDR_TO_KVADDR(coremap_paddr);
+	// Place canary value to help detect kernel stack overflow.
+	kernel_stack_bottom = (uint32_t *)((char *)coremap - PAGE_SIZE);
+	*kernel_stack_bottom = STACK_CANARY;
 	bzero((void *)coremap, coremap_bytes);	
 	// Mark kernel and coremap pages as allocated in coremap.
 	p = paddr_to_core_idx(firstpaddr);
@@ -233,7 +248,7 @@ vm_init_coremap()
 	coremap[0].as = NULL;
 	coremap[0].vaddr = (vaddr_t)MIPS_KSEG0;
 	coremap[0].prev = 0;
-	// Mark remainder of pages as free.
+	// Mark remainder of pages as one big free block.
 	KASSERT(p < page_max);
 	coremap[p].status = set_core_status(0, 0, 0, page_max - p);
 	coremap[p].prev = 0;
@@ -241,13 +256,14 @@ vm_init_coremap()
 	// Includes kernel and coremap in used_bytes.
 	used_bytes = p * PAGE_SIZE;
 	spinlock_init(&coremap_lock);
-	validate_coremap();
+	KASSERT(validate_coremap() == 0);
 
 	kprintf("\nvm_init_coremap\n");
-	kprintf("lastpaddr  = 0x%07x\n", lastpaddr);
-	kprintf("firstpaddr = 0x%07x\n", firstpaddr);
-	kprintf("coremap    = 0x%07x\n", coremap_paddr);
+	kprintf("lastpaddr  = 0x%08x\n", lastpaddr);
+	kprintf("firstpaddr = 0x%08x\n", firstpaddr);
+	kprintf("coremap    = 0x%08x\n", coremap_paddr);
 	kprintf("page_max   = %u\n", page_max);
+	kprintf("*kernel_stack_bottom = 0x%08x\n", *(uint32_t *)kernel_stack_bottom);
 	kprintf("\n");
 }
 
@@ -326,6 +342,8 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		}
 		block_pages = get_core_npages(p);
 	}
+	KASSERT(!(coremap[p].status & VM_CORE_USED));
+	KASSERT(get_core_npages(p) >= npages);
 	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
@@ -334,7 +352,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	used_bytes += npages * PAGE_SIZE;
 	coremap[p].status = set_core_status(1, 0, 0, npages);
 	coremap[p].as = as;
-	if ((as == NULL) || (vaddr == (vaddr_t)NULL)) {
+	if (as == NULL) {
 		// Kernel pages don't have an addrsapce.
 		// Pages are direct mapped w/o TLB.
         coremap[p].vaddr = vaddr_direct;
@@ -363,7 +381,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		}
 	}
 	next_fit = p;
-	validate_coremap();
+	KASSERT(validate_coremap() == 0);
 
 	spinlock_release(&coremap_lock);
 
@@ -468,7 +486,7 @@ free_pages(paddr_t paddr)
             coremap[next].prev = prev;
 		}
 	}
-	validate_coremap();
+	KASSERT(validate_coremap() == 0);
 
 	spinlock_release(&coremap_lock);
 }
@@ -583,6 +601,15 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 
 /*
  * Handles translation lookaside buffer faults.
+ *
+ * If faultaddress is in a valid segment for this address space
+ * then:
+ * 
+ * If page is resident in coremap, proceed.
+ * If page has never been accessed, allocate a page.
+ * TODO(aabo): If page is swapped out, then swap in.
+ * 
+ * Finally, update TLB with page and return for retry.
  *
  * Args:
  *   faulttype: enumerated fault type defined in vm.h.

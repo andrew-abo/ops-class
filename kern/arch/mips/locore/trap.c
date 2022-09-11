@@ -307,7 +307,7 @@ mips_trap(struct trapframe *tf)
 	kprintf("panic: EPC 0x%x, exception vaddr 0x%x\n",
 		tf->tf_epc, tf->tf_vaddr);
 
-	panic("mips_trap: 8I can't handle this... I think I'll just die now...\n");
+	panic("mips_trap: I can't handle this... I think I'll just die now...\n");
 
  done:
 	/*

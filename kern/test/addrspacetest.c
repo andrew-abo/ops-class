@@ -303,3 +303,121 @@ addrspacetest9(int nargs, char **args)
 
 	return 0;
 }
+
+#define TEST_PAGES 1000
+#define CREATE_CYCLES 10
+
+// Tests as_copy correctly copies page table
+// entries and physical pages.
+static void
+create_and_free(struct addrspace *as)
+{
+    unsigned n_free_pages;
+    unsigned n1_create_pages;
+    unsigned n2_create_pages;
+    unsigned i, k;
+    struct pte *pte;
+    unsigned offset;
+    unsigned stride;
+
+    KASSERT(as != NULL);
+
+    n1_create_pages = 1 + random() % TEST_PAGES;
+    offset = random() % 0x1000;
+    stride = random() % 0x100;
+    kprintf("create %d pages\n", n1_create_pages);
+    for (i = 0; i < n1_create_pages; i++) {
+        pte = as_create_page(as, (offset + i * stride) * PAGE_SIZE);
+        KASSERT(pte != NULL);
+    }
+
+    n_free_pages = random() % n1_create_pages;
+    for (i = 0; i < n_free_pages; i++) {
+        // May generate repeats which will attempt to destroy a page
+        // more than once, but that should be silently ignored.
+        k = random() % n1_create_pages;
+        as_destroy_page(as, (offset + k * stride) * PAGE_SIZE);
+    }
+
+    offset += n1_create_pages * stride + random() % 0x1000;
+    stride = random() % 0x100;
+    n2_create_pages = random() % TEST_PAGES;
+    for (i = 0; i < n2_create_pages; i++) {
+        pte = as_create_page(as, (offset + i * stride) * PAGE_SIZE);
+        KASSERT(pte != NULL);
+    }
+}
+
+// Stress test create, free, destroy pages.
+int
+addrspacetest10(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *as;
+
+    kprintf("Starting as10 test...\n");
+
+    for (int i = 0; i < CREATE_CYCLES; i++) {
+        kprintf("loop %d (0x%08x)\n", i, random());
+        as = as_create();
+        KASSERT(as != NULL);
+        create_and_free(as);
+        //lock_and_dump_coremap();
+        as_destroy(as);
+    }
+
+	success(TEST161_SUCCESS, SECRET, "as10");
+	return 0;
+}
+
+#define MAX_PAGES 4096
+
+// Allocate all pages.
+int
+addrspacetest11(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *as;
+    struct pte *pte;
+    int i;
+
+    kprintf("Starting as11 test...\n");
+
+    as = as_create();
+    KASSERT(as != NULL);
+
+    // Exhaust user memory.
+    for (i = 0; i < MAX_PAGES; i++) {
+        pte = as_create_page(as, i * PAGE_SIZE);
+        if (pte == NULL) {
+            break;
+        }
+    }
+    KASSERT(pte == NULL);
+
+    // Free one page at front
+    as_destroy_page(as, 0);
+    pte = as_create_page(as, MAX_PAGES * PAGE_SIZE);
+    KASSERT(pte != NULL);
+
+    // Should fail since we are full again.
+    pte = as_create_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
+    KASSERT(pte == NULL);
+
+    // Free one page at back.
+    as_destroy_page(as, (i-1) * PAGE_SIZE);
+    pte = as_create_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
+    KASSERT(pte != NULL);
+
+    // Should fail since we are full again.
+    pte = as_create_page(as, (MAX_PAGES + 2) * PAGE_SIZE);
+    KASSERT(pte == NULL);
+
+    as_destroy(as);
+
+	success(TEST161_SUCCESS, SECRET, "as11");
+	return 0;
+}
+

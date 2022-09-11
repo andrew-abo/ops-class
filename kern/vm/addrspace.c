@@ -601,6 +601,7 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 	result = touch_pte(as, vaddr, 0, &tab);
 	KASSERT(result == 0);
 	if (tab == NULL) {
+		// Silently ignores non-existent pages.
 		lock_release(as->pages_lock);
 		return;
 	}
