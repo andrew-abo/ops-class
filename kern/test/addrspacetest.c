@@ -39,19 +39,20 @@ addrspacetest2(int nargs, char **args)
     kprintf("Starting as2 test...\n");
     as = as_create();
     KASSERT(as != NULL);
-    as_define_region(as, 0x00010000, 0x2331, 1, 1, 0);
-    as_define_region(as, 0x00020000, 0x2331, 1, 0, 1);
-    as_define_region(as, 0x00030000, 0x2331, 0, 1, 0);
+    as_define_region(as, 0x00010001, 0x2331, 1, 1, 0);
+    as_define_region(as, 0x00020020, 0x2331, 1, 0, 1);
+    as_define_region(as, 0x00030300, 0x2331, 0, 1, 0);
     as_define_region(as, 0x00040000, 0x2331, 1, 1, 0);
     as_define_region(as, 0x00050000, 0x2331, 0, 1, 0);
     as_define_region(as, 0x00060000, 0x9990, 1, 0, 1);
+    // Segments are page aligned.
     KASSERT(as->segments[0].vbase == 0x00010000);
-    KASSERT(as->segments[0].size == 0x2331);
+    KASSERT(as->segments[0].size == 0x3000);
     KASSERT(as->segments[0].access & VM_SEGMENT_READABLE);
     KASSERT(as->segments[0].access & VM_SEGMENT_WRITEABLE);
     KASSERT(!(as->segments[0].access & VM_SEGMENT_EXECUTABLE));
     KASSERT(as->segments[5].vbase == 0x00060000);
-    KASSERT(as->segments[5].size == 0x9990);
+    KASSERT(as->segments[5].size == 0xa000);
     KASSERT(as->segments[5].access & VM_SEGMENT_READABLE);
     KASSERT(!(as->segments[5].access & VM_SEGMENT_WRITEABLE));
     KASSERT(as->segments[5].access & VM_SEGMENT_EXECUTABLE);
@@ -228,64 +229,9 @@ addrspacetest7(int nargs, char **args)
 	return 0;
 }
 
-// Tests as_copy correctly copies page table
-// entries and physical pages.
-int
-addrspacetest8(int nargs, char **args)
-{
-    (void)nargs;
-    (void)args;
-    struct addrspace *src, *dst;
-    struct pte *pte0, *pte1;
-    int result;
-    void **level1;
-    void **level2;
-    struct pte **level3;
-
-    kprintf("Starting as8 test...\n");
-    src = as_create();
-    KASSERT(src != NULL);
-
-    pte0 = as_create_page(src, 0x00010000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x00020000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x00030000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x00400000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x00510000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x06000000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x07000000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x0a000000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(src, 0x7f000000);
-    KASSERT(pte0 != NULL);
-    // Write some data to copy.
-    *((uint32_t *)PADDR_TO_KVADDR(pte0->paddr)) = 0xdeadbeef;
-
-    result = as_copy(src, &dst);
-    KASSERT(result == 0);
-
-    level1 = dst->pages0[15];
-    level2 = level1[28];
-    level3 = level2[0];
-    pte1 = level3[0];
-    KASSERT(*((uint32_t *)PADDR_TO_KVADDR(pte1->paddr)) == 0xdeadbeef);
-
-    as_destroy(src);
-    as_destroy(dst);
-	success(TEST161_SUCCESS, SECRET, "as8");
-
-	return 0;
-}
-
 // Tests as_destroy_page can destroy a page.
 int
-addrspacetest9(int nargs, char **args)
+addrspacetest8(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
@@ -299,7 +245,7 @@ addrspacetest9(int nargs, char **args)
     KASSERT(pte0 != NULL);
     as_destroy_page(as, 0x00040000);
     as_destroy(as);
-	success(TEST161_SUCCESS, SECRET, "as9");
+	success(TEST161_SUCCESS, SECRET, "as8");
 
 	return 0;
 }
@@ -350,7 +296,7 @@ create_and_free(struct addrspace *as)
 
 // Stress test create, free, destroy pages.
 int
-addrspacetest10(int nargs, char **args)
+addrspacetest9(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
@@ -363,11 +309,10 @@ addrspacetest10(int nargs, char **args)
         as = as_create();
         KASSERT(as != NULL);
         create_and_free(as);
-        //lock_and_dump_coremap();
         as_destroy(as);
     }
 
-	success(TEST161_SUCCESS, SECRET, "as10");
+	success(TEST161_SUCCESS, SECRET, "as9");
 	return 0;
 }
 
@@ -375,7 +320,7 @@ addrspacetest10(int nargs, char **args)
 
 // Allocate all pages.
 int
-addrspacetest11(int nargs, char **args)
+addrspacetest10(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
@@ -417,7 +362,7 @@ addrspacetest11(int nargs, char **args)
 
     as_destroy(as);
 
-	success(TEST161_SUCCESS, SECRET, "as11");
+	success(TEST161_SUCCESS, SECRET, "as10");
 	return 0;
 }
 

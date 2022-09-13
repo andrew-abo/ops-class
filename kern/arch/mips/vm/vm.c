@@ -85,6 +85,16 @@ dump_coremap()
 	}
 }
 
+/*
+ * Returns 1 if kernel stack canary is still intact (appears not corrupted),
+ * else 0.
+ */
+int
+kernel_stack_ok()
+{
+    return *kernel_stack_bottom == STACK_CANARY ? 1 : 0;
+}
+
 void lock_and_dump_coremap()
 {
     spinlock_acquire(&coremap_lock);
@@ -108,6 +118,38 @@ static unsigned
 paddr_to_core_idx(paddr_t paddr)
 {
     return (unsigned)(paddr / PAGE_SIZE);
+}
+
+/*
+ * Returns addrspace that paddr belongs to.
+ */
+struct addrspace 
+*vm_get_as(paddr_t paddr)
+{
+    unsigned p;
+	struct addrspace *as;
+
+	p = paddr_to_core_idx(paddr);
+	spinlock_acquire(&coremap_lock);
+	as = coremap[p].as;
+	spinlock_release(&coremap_lock);
+	return as;
+}
+
+/*
+ * Returns virtual address mapped to paddr.
+ */
+vaddr_t
+vm_get_vaddr(paddr_t paddr)
+{
+    unsigned p;
+    vaddr_t vaddr;
+
+	p = paddr_to_core_idx(paddr);
+	spinlock_acquire(&coremap_lock);
+	vaddr = coremap[p].vaddr;
+	spinlock_release(&coremap_lock);
+	return vaddr;
 }
 
 /*
@@ -315,6 +357,9 @@ alloc_kpages(unsigned npages)
  * 
  * Returns:
  *   Physical address of first page on success, else 0.
+ *   We can use physical address of zero as an error condition because
+ *   the exception handler is stored there and so we should
+ *   never be returning zero (at least on MIPS).
  */
 paddr_t 
 alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
@@ -384,8 +429,6 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	KASSERT(validate_coremap() == 0);
 
 	spinlock_release(&coremap_lock);
-
-	
 
 	return paddr;
 }
@@ -624,6 +667,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	struct addrspace *as;
 	int read_request;
 	struct pte *pte;
+	int page_table_already_locked;
 
 	// WARNING: Using kprintf in this function may cause TLB to
 	// behave unexpectedly.
@@ -673,16 +717,21 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// and retry.
 	if (faulttype == VM_FAULT_READONLY) {
 		if (flag_page_as_dirty(faultaddress) == 0) {
-			// Successfully flagged, retry access.
+			// Successfully flagged in TLB, retry access.
             return 0;
 		}
-		// Page is no longer in TLB.
+		// Page is no longer in TLB, so treat as vanilla write page fault.
 	}
 	// Find or create a page table entry.
-	lock_acquire(as->pages_lock);
+	page_table_already_locked = lock_do_i_hold(as->pages_lock);
+	if (!page_table_already_locked) {
+		lock_acquire(as->pages_lock);
+	}
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
-		lock_release(as->pages_lock);
+		if (!page_table_already_locked) {
+            lock_release(as->pages_lock);
+		}
 		return ENOMEM;
 	}
 	if (!(pte->status & VM_PTE_VALID)) {
@@ -691,7 +740,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		// so allocate a new page.
 		pte->paddr = alloc_pages(1, as, faultaddress);
 		if (pte->paddr == (paddr_t)NULL) {
-			lock_release(as->pages_lock);
+			if (!page_table_already_locked) {
+                lock_release(as->pages_lock);
+			}
 			return ENOMEM;
 		}
 		pte->status |= VM_PTE_VALID;
@@ -699,6 +750,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	/* make sure it's page-aligned */
 	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
 	vm_tlb_insert(pte->paddr, faultaddress);
-	lock_release(as->pages_lock);
+	if (!page_table_already_locked) {
+        lock_release(as->pages_lock);
+	}
 	return 0;
 }

@@ -38,6 +38,7 @@
 
 #include <machine/vm.h>
 #include <types.h>
+#include <addrspace.h>
 
 /* Fault-type arguments to vm_fault() */
 #define VM_FAULT_READ        0    /* A read was attempted */
@@ -76,6 +77,10 @@ void free_kpages(vaddr_t vaddr);
 paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
 void free_pages(vaddr_t vaddr);
 void vm_tlb_erase(void);
+
+struct addrspace *vm_get_as(paddr_t paddr);
+vaddr_t vm_get_vaddr(paddr_t paddr);
+int kernel_stack_ok(void);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

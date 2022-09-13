@@ -138,6 +138,7 @@ copy_page_table(struct addrspace *dst, void **src_pages, int level, vaddr_t vpn)
 {
 	struct pte *dst_pte, *src_pte;
 	vaddr_t vaddr, next_vpn;
+	int result;
 
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
@@ -156,12 +157,15 @@ copy_page_table(struct addrspace *dst, void **src_pages, int level, vaddr_t vpn)
 			// or cause it to swap in and make it valid.
 			src_pte = (struct pte *)src_pages[idx];
 			memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
-			        (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
+			        (const void *)vaddr, PAGE_SIZE);
 			dst_pte->status = src_pte->status;
 			KASSERT(dst_pte->status | VM_PTE_VALID);
 			continue;
         }
-		copy_page_table(dst, src_pages[idx], next_level, next_vpn);
+		result = copy_page_table(dst, src_pages[idx], next_level, next_vpn);
+		if (result) {
+			return result;
+		}
 	}
 	return 0;
 }
@@ -171,6 +175,10 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 {
 	struct addrspace *dst;
 	int result;
+
+	// We assume src is the active address space so that we can reference
+	// source pages with virtual addresses.
+	KASSERT(proc_getas() == src);
 
 	*ret = NULL;
 	dst = as_create();
@@ -201,6 +209,7 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	return 0;
 }
 
+// Helper for dump_page_table.
 static void
 visit_page_table(void **pages, int level, vaddr_t vpn) 
 {
@@ -274,6 +283,48 @@ destroy_page_table(void **pages, int level)
 	}
 }
 
+static void
+validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn) 
+{
+	struct pte *pte;
+	vaddr_t vaddr, next_vpn;
+	int next_level = level + 1;
+
+	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
+        if (pages[idx] == NULL) {
+			continue;
+		}
+		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
+		if (level == PT_LEVELS - 1) {
+			vaddr = next_vpn << PAGE_OFFSET_BITS;
+			pte = (struct pte *)pages[idx];
+			if (pte->status & VM_PTE_VALID) {
+                KASSERT(vm_get_as(pte->paddr) == as);
+                KASSERT(vm_get_vaddr(pte->paddr) == vaddr);
+				//as_operation_is_valid(as, vaddr, -1 /*readable or writeable*/);
+			}
+			continue;
+        }
+		validate_page_table(as, pages[idx], next_level, next_vpn);
+	}
+}
+
+/*
+ * Validates page table is consistent with address space and coremap.
+ *
+ * Returns:
+ *   0 if valid, else panics.
+ */
+int
+as_validate_page_table(struct addrspace *as)
+{
+	//KASSERT(as->next_segment > 0);
+    lock_acquire(as->pages_lock);
+	validate_page_table(as, as->pages0, 0, 0x0);
+	lock_release(as->pages_lock);
+    return 0;
+}
+
 /*
  * Destroy all dynamic memory associated with this address space
  * including page table and coremap pages.
@@ -281,6 +332,8 @@ destroy_page_table(void **pages, int level)
 void
 as_destroy(struct addrspace *as)
 {
+	KASSERT(!lock_do_i_hold(as->pages_lock));
+	KASSERT(!lock_do_i_hold(as->heap_lock));
 	destroy_page_table(as->pages0, 0);
 	lock_destroy(as->pages_lock);
 	lock_destroy(as->heap_lock);
@@ -310,9 +363,10 @@ as_deactivate(void)
 }
 
 /*
- * Set up a segment at virtual address VADDR of size MEMSIZE. The
- * segment in memory extends from VADDR up to (but not including)
- * VADDR+MEMSIZE.
+ * Set up a segment at virtual address VADDR of size MEMSIZE. 
+ * Segments are forced to be page aligned.
+ * The segment in memory extends from the page containing VADDR up 
+ * through the page containing VADDR+MEMSIZE.
  *
  * The READABLE, WRITEABLE, and EXECUTABLE flags are set if read,
  * write, or execute permission should be set on the segment. At the
@@ -331,8 +385,8 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
 		return ENOMEM;
 	}
     s = as->next_segment++;
-	as->segments[s].vbase = vaddr;
-	as->segments[s].size = memsize;
+	as->segments[s].vbase = vaddr & PAGE_FRAME;
+	as->segments[s].size = (memsize + PAGE_SIZE - 1) & PAGE_FRAME;
 	as->segments[s].access = (readable ? VM_SEGMENT_READABLE : 0) | 
 	                         (writeable ? VM_SEGMENT_WRITEABLE|VM_SEGMENT_WRITEABLE_ACTUAL : 0) |
 							 (executable ? VM_SEGMENT_EXECUTABLE : 0);
@@ -441,7 +495,7 @@ dump_segments(struct addrspace *as)
  * Args:
  *   as: Pointer to addrspace with defined segments.
  *   vaddr: Virtual address to check.
- *   read_request: 1 if reading, else 0.
+ *   read_request: 1 if reading, 0 if writing, -1 if either.
  * 
  * Returns:
  *   1 if vaddr in as->segments[] and read_request matches segment 
@@ -452,26 +506,29 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 {
 	vaddr_t vbase;
 	size_t size;
-	int result;
+	int valid;
 
     for (int s = 0; s < as->next_segment; s++) {
 		vbase = as->segments[s].vbase;
 		size = as->segments[s].size;
 		if ((vaddr >= vbase) && (vaddr < vbase + size)) {
-			if (read_request) {
+			if (read_request > 0) {
 				return as->segments[s].access & VM_SEGMENT_READABLE ? 1 : 0;
+			} else if (read_request == 0) {
+                return as->segments[s].access & VM_SEGMENT_WRITEABLE ? 1 : 0;
 			}
-			return as->segments[s].access & VM_SEGMENT_WRITEABLE ? 1 : 0;
+			return as->segments[s].access & (VM_SEGMENT_READABLE || 
+			  VM_SEGMENT_WRITEABLE) ? 1 : 0;
 		}
 	}
 	// Heap is a special segment not stored in as->segments[].
-	result = 0;
+	valid = 0;
 	lock_acquire(as->heap_lock);
 	if ((vaddr >= as->vheapbase) && (vaddr < as->vheaptop)) {
-        result = 1;
+        valid = 1;
     }
 	lock_release(as->heap_lock);
-	return result;
+	return valid;
 }
 
 /*
@@ -576,6 +633,28 @@ struct pte
 
 	result = touch_pte(as, vaddr, 1, &tab);
 	if (result) {
+		return NULL;
+	}
+	return *tab;
+}
+
+/*
+ * Read-only look up of page table entry by vaddr.
+ *
+ * Returns:
+ *   Pointer to pte or NULL if not found.
+ */
+struct pte
+*as_lookup_pte(struct addrspace *as, vaddr_t vaddr)
+{
+	int result;
+	struct pte **tab;
+
+	lock_acquire(as->pages_lock);
+	result = touch_pte(as, vaddr, 0, &tab);
+	KASSERT(result == 0);
+	lock_release(as->pages_lock);
+	if (tab == NULL) {
 		return NULL;
 	}
 	return *tab;

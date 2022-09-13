@@ -216,18 +216,6 @@ proc_zombify(struct proc *proc)
 		as_destroy(as);
 	}
 	if (proc->p_cwd_lock) {
-		// TODO(aabo): proc->p_cwd_lock == 0xdeadbeef causes KASSERT failure in vm_fault.
-		// 0xdeadbeef is an illegal TLB mapped KSEG2 address, which causes page fault, 
-		// invoking vm_fault, then KASSERT fails.
-		// 0xdeadbeef is the value that kfree fills free blocks with.
-		// So, we appear to referencing kernel heap memory that has been freed.
-		// But this only happens rarely when repeatedly running forktest, for example.
-		// all the proc fields are 0xdeadbeef, so proc is pointing to kfreed kernel memory.
-		// TODO(aabo): remove
-		// Not getting hitting this assert anymore, but now it hangs sometimes during vm-stability.t.
-		if (proc->p_cwd_lock == (struct lock *)0xdeadbeef) {
-			panic("proc_zombify: p_cwd_lock references already freed memory.");
-		}
         lock_destroy(proc->p_cwd_lock);
 		proc->p_cwd_lock = NULL;
 	}
@@ -319,11 +307,6 @@ proc_create_runprogram(const char *name)
 	if (newproc == NULL) {
 		return NULL;
 	}
-
-	/* VM fields */
-	newproc->p_addrspace = NULL;
-
-	/* VFS fields */
 
 	/*
 	 * Lock the current process to copy its current directory.

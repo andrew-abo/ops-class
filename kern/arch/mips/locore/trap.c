@@ -39,6 +39,7 @@
 #include <vm.h>
 #include <mainbus.h>
 #include <syscall.h>
+#include <kern/errno.h>
 
 
 /* in exception-*.S */
@@ -124,6 +125,7 @@ mips_trap(struct trapframe *tf)
 	/*bool isutlb; -- not used */
 	bool iskern;
 	int spl;
+	int result;
 
 	/* The trap frame is supposed to be 35 registers long. */
 	KASSERT(sizeof(struct trapframe)==(35*4));
@@ -225,19 +227,20 @@ mips_trap(struct trapframe *tf)
 	 * Call vm_fault on the TLB exceptions.
 	 * Panic on the bus error exceptions.
 	 */
+	result = 0;
 	switch (code) {
 	case EX_MOD:
-		if (vm_fault(VM_FAULT_READONLY, tf->tf_vaddr)==0) {
+		if ((result = vm_fault(VM_FAULT_READONLY, tf->tf_vaddr)) == 0) {
 			goto done;
 		}
 		break;
 	case EX_TLBL:
-		if (vm_fault(VM_FAULT_READ, tf->tf_vaddr)==0) {
+		if ((result = vm_fault(VM_FAULT_READ, tf->tf_vaddr)) == 0) {
 			goto done;
 		}
 		break;
 	case EX_TLBS:
-		if (vm_fault(VM_FAULT_WRITE, tf->tf_vaddr)==0) {
+		if ((result = vm_fault(VM_FAULT_WRITE, tf->tf_vaddr)) == 0) {
 			goto done;
 		}
 		break;
@@ -267,7 +270,14 @@ mips_trap(struct trapframe *tf)
 		 * Fatal fault in user mode.
 		 * Kill the current user process.
 		 */
-		kill_curthread(tf->tf_epc, code, tf->tf_vaddr);
+		 switch (result) {
+         case ENOMEM:
+         kprintf("User mode out of memory.\n");
+         break;
+         case EFAULT:
+         kprintf("User mode Segmentation fault.\n");
+        }
+        kill_curthread(tf->tf_epc, code, tf->tf_vaddr);
 		goto done;
 	}
 
@@ -301,7 +311,14 @@ mips_trap(struct trapframe *tf)
 	/*
 	 * Really fatal kernel-mode fault.
 	 */
-
+	switch (result) {
+    case ENOMEM:
+    kprintf("Kernel mode out of memory.\n");
+    break;
+    case EFAULT:
+    kprintf("Kernel mode segmentation fault.\n");
+    }
+  
 	kprintf("panic: Fatal exception %u (%s) in kernel mode\n", code,
 		trapcodenames[code]);
 	kprintf("panic: EPC 0x%x, exception vaddr 0x%x\n",
