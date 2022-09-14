@@ -185,5 +185,6 @@ void dump_segments(struct addrspace *as);
 struct pte *as_create_page(struct addrspace *as, vaddr_t vaddr);
 void as_destroy_page(struct addrspace *as, vaddr_t vaddr);
 int as_validate_page_table(struct addrspace *as);
+void vm_can_sleep(void);
 
 #endif /* _ADDRSPACE_H_ */

@@ -158,12 +158,12 @@ proc_zombify(struct proc *proc)
 	KASSERT(proc != kproc);
 
 	spinlock_acquire(&proc->p_lock);
-
 	if (proc->p_state == S_ZOMBIE) {
 		spinlock_release(&proc->p_lock);
 		return;
 	}
 	proc->p_state = S_ZOMBIE;
+	spinlock_release(&proc->p_lock);
 
 	/* VFS fields */
 	if (proc->p_cwd) {
@@ -223,8 +223,6 @@ proc_zombify(struct proc *proc)
 		lock_destroy(proc->files_lock);
 		proc->files_lock = NULL;
 	}
-
-	spinlock_release(&proc->p_lock);
 }
 
 /*

@@ -334,6 +334,7 @@ alloc_kpages(unsigned npages)
 {
 	paddr_t paddr;
 
+	vm_can_sleep();
 	paddr = alloc_pages(npages, NULL, (vaddr_t)NULL);
 	if (paddr == 0) {
 		return 0;
@@ -426,7 +427,6 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		}
 	}
 	next_fit = p;
-	KASSERT(validate_coremap() == 0);
 
 	spinlock_release(&coremap_lock);
 
@@ -529,7 +529,6 @@ free_pages(paddr_t paddr)
             coremap[next].prev = prev;
 		}
 	}
-	KASSERT(validate_coremap() == 0);
 
 	spinlock_release(&coremap_lock);
 }

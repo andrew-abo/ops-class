@@ -36,12 +36,33 @@
 #include <mips/tlb.h>
 #include <spl.h>
 #include <synch.h>
+#include <current.h>
+#include <cpu.h>
 
 /*
  * Note! If OPT_DUMBVM is set, as is the case until you start the VM
  * assignment, this file is not compiled or linked or in any way
  * used. The cheesy hack versions in dumbvm.c are used instead.
  */
+
+/*
+ * Check if we're in a context that can sleep. While most of the
+ * operations in dumbvm don't in fact sleep, in a real VM system many
+ * of them would. In those, assert that sleeping is ok. This helps
+ * avoid the situation where syscall-layer code that works ok with
+ * dumbvm starts blowing up during the VM assignment.
+ */
+void
+vm_can_sleep(void)
+{
+	if (CURCPU_EXISTS()) {
+		/* must not hold spinlocks */
+		KASSERT(curcpu->c_spinlocks == 0);
+
+		/* must not be in an interrupt handler */
+		KASSERT(curthread->t_in_interrupt == 0);
+	}
+}
 
 /*
  * Allocates and intializes an empty addrspace struct.
@@ -179,6 +200,8 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	// We assume src is the active address space so that we can reference
 	// source pages with virtual addresses.
 	KASSERT(proc_getas() == src);
+
+	vm_can_sleep();
 
 	*ret = NULL;
 	dst = as_create();
@@ -334,6 +357,7 @@ as_destroy(struct addrspace *as)
 {
 	KASSERT(!lock_do_i_hold(as->pages_lock));
 	KASSERT(!lock_do_i_hold(as->heap_lock));
+	vm_can_sleep();
 	destroy_page_table(as->pages0, 0);
 	lock_destroy(as->pages_lock);
 	lock_destroy(as->heap_lock);
@@ -381,6 +405,7 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
 {
 	int s;
 
+	vm_can_sleep();
 	if (as->next_segment > SEGMENT_MAX) {
 		return ENOMEM;
 	}
@@ -399,6 +424,7 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
 int
 as_prepare_load(struct addrspace *as)
 {
+	vm_can_sleep();
 	for (int s = 0; s < as->next_segment; s++) {
 		as->segments[s].access |= VM_SEGMENT_WRITEABLE;
 	}
@@ -415,6 +441,7 @@ as_prepare_load(struct addrspace *as)
 int
 as_complete_load(struct addrspace *as)
 {
+	vm_can_sleep();
 	for (int s = 0; s < as->next_segment; s++) {
         as->segments[s].access &= ~VM_SEGMENT_WRITEABLE;
 		if (as->segments[s].access & VM_SEGMENT_WRITEABLE_ACTUAL) {
