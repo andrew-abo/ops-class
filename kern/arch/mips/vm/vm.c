@@ -373,6 +373,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	unsigned next;
 
 	KASSERT(npages > 0);
+	KASSERT((as == NULL) || ((as != NULL) && (vaddr < MIPS_KSEG0)));
 
 	spinlock_acquire(&coremap_lock);
 
@@ -566,6 +567,9 @@ flag_page_as_dirty(vaddr_t vaddr)
 	int tlb_idx;
 	uint32_t entryhi, entrylo;
 
+	// Only user space pages should be in the TLB.
+	KASSERT(vaddr < MIPS_KSEG0);
+
 	spinlock_acquire(&coremap_lock);
 
 	spl = splhigh();
@@ -624,6 +628,9 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 	uint32_t ehi, elo;
 	int spl;
 	int idx;
+
+	// Only user space pages should be in the TLB.
+	KASSERT(vaddr < MIPS_KSEG0);
 
 	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();

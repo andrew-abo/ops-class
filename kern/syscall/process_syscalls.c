@@ -206,14 +206,12 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
         return ESRCH;
     }
 
-    spinlock_acquire(&child->p_lock);
-
-    if (spinlock_do_i_hold(&parent->p_lock)) {
+    if (parent == child) {
         // We are attempting to wait for ourself so abort.
-        KASSERT(parent->pid == child->pid);
-        spinlock_release(&parent->p_lock);
         return ECHILD;
     }
+
+    spinlock_acquire(&child->p_lock);
 
     spinlock_acquire(&parent->p_lock);
     if (child->ppid != parent->pid) {
