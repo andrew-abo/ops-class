@@ -73,16 +73,16 @@ proctest2(int nargs, char **args)
 
 	p = proc_create("new");
 	KASSERT(p != NULL);
+	p->pid = new_pid();
+	pids[2] = p->pid;
 	result = proclist_insert(p);
 	KASSERT(result == 0);
 	
 	// Delete all the procs.
 	for (i = 0; i < NEWPROCS; i++) {
 		p = proclist_remove(pids[i]);
-		if (i != 2) {
-            KASSERT(p != NULL);
-            proc_destroy(p);
-		}
+		KASSERT(p != NULL);
+		proc_destroy(p);
 	}
 
 	kprintf_t("\n");

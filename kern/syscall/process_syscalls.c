@@ -224,7 +224,6 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     if (child->p_state != S_ZOMBIE) {
         spinlock_release(&child->p_lock);
         lock_acquire(child->waitpid_lock);
-        kprintf("cv_wait(%d)\n", pid);
         cv_wait(child->waitpid_cv, child->waitpid_lock);
         lock_release(child->waitpid_lock);
         spinlock_acquire(&child->p_lock);

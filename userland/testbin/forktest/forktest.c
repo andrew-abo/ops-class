@@ -154,7 +154,6 @@ dowait(int nowait, int pid)
 		/* in the fork in question we were the child; exit */
 		snprintf(msg, sizeof(msg), "exit\n");
 		//pidprint(mypid, msg);
-		printf("exit(%d)\n", mypid);
 		exit(0);
 	}
 
