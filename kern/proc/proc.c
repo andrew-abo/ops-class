@@ -60,6 +60,30 @@ struct proc *kproc;
 static struct proc *proclist = NULL;
 static struct lock *proclist_lock;
 
+static void
+proc_abort(struct proc *proc)
+{
+	if (proc == NULL) {
+		return;
+	}
+	if (proc->p_cwd_lock) {
+		lock_destroy(proc->p_cwd_lock);
+	}
+	if (proc->waitpid_lock) {
+		lock_destroy(proc->waitpid_lock);
+	}
+	if (proc->waitpid_cv) {
+		cv_destroy(proc->waitpid_cv);
+	}
+	if (proc->files_lock) {
+		lock_destroy(proc->files_lock);
+	}
+	if (proc->p_name) {
+		kfree(proc->p_name);
+	}
+	kfree(proc);
+}
+
 /*
  * Create a proc structure.
  *
@@ -71,13 +95,8 @@ proc_create(const char *name)
 {
 	struct proc *proc;
 
-	proc = kmalloc(sizeof(*proc));
+	proc = kmalloc(sizeof(struct proc));
 	if (proc == NULL) {
-		return NULL;
-	}
-	proc->p_name = kstrdup(name);
-	if (proc->p_name == NULL) {
-		kfree(proc);
 		return NULL;
 	}
 	proc->pid = 0;
@@ -85,52 +104,43 @@ proc_create(const char *name)
 	proc->p_numthreads = 0;
 	proc->p_state = S_READY;
 	proc->exit_status = 0;
+	proc->p_name = NULL;
+	proc->p_cwd = NULL;
+	proc->p_cwd_lock = NULL;
+	proc->waitpid_lock = NULL;
+	proc->waitpid_cv = NULL;
+	proc->p_addrspace = NULL;
+	proc->next = NULL;
+	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
+		proc->files[fd] = NULL;
+	}
+	
+	proc->p_name = kstrdup(name);
+	if (proc->p_name == NULL) {
+		proc_abort(proc);
+		return NULL;
+	}
 	proc->waitpid_cv = cv_create("waitpid");
 	if (proc->waitpid_cv == NULL) {
-		kfree(proc->p_name);
-		kfree(proc);
+		proc_abort(proc);
 		return NULL;
 	}
 	proc->waitpid_lock = lock_create("waitpid");
 	if (proc->waitpid_lock == NULL) {
-		cv_destroy(proc->waitpid_cv);
-		kfree(proc->p_name);
-		kfree(proc);
+		proc_abort(proc);
+		return NULL;
+	}
+	proc->p_cwd_lock = lock_create("p_cwd");
+	if (proc->p_cwd_lock == NULL) {
+		proc_abort(proc);
+		return NULL;
+	}
+	proc->files_lock = lock_create("files");
+	if (proc->files_lock == NULL) {
+		proc_abort(proc);
 		return NULL;
 	}
 	spinlock_init(&proc->p_lock);
-
-	/* VM fields */
-	proc->p_addrspace = NULL;
-
-	/* VFS fields */
-	proc->p_cwd = NULL;
-	proc->p_cwd_lock = lock_create("p_cwd");
-	if (proc->p_cwd_lock == NULL) {
-		spinlock_cleanup(&proc->p_lock);
-		lock_destroy(proc->waitpid_lock);
-		cv_destroy(proc->waitpid_cv);
-		kfree(proc->p_name);
-		kfree(proc);
-		return NULL;
-	}
-
-	/* File descriptor table */
-	proc->files_lock = lock_create("files");
-	if (proc->files_lock == NULL) {
-		lock_destroy(proc->p_cwd_lock);		
-		spinlock_cleanup(&proc->p_lock);
-		lock_destroy(proc->waitpid_lock);
-		cv_destroy(proc->waitpid_cv);
-		kfree(proc->p_name);
-		kfree(proc);
-		return NULL;
-	}
-	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
-		proc->files[fd] = NULL;
-	}
-
-	proc->next = NULL;
 
 	return proc;
 }

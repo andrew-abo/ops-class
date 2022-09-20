@@ -679,7 +679,10 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// behave unexpectedly.
 
 	// TLB faults should only occur in KUSEG.
-	KASSERT(faultaddress < MIPS_KSEG0);
+	//KASSERT(faultaddress < MIPS_KSEG0);
+	if (faultaddress >= MIPS_KSEG0) {
+		panic("faultaddress = 0x%08x >= MIPS_KSEG0", faultaddress);
+	}
 	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 
 	switch (faulttype) {
