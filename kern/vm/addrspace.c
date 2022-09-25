@@ -146,6 +146,8 @@ struct pte
  * 
  * copy_page_table(dst, src->pages0, 0, 0x0)
  * 
+ * Caller is responsible for locking source page table.
+ * 
  * Args:
  *   dst: Pointer to destination address space.
  *   src_pages: Pointer to source address space level0 page table.
@@ -161,6 +163,7 @@ copy_page_table(struct addrspace *dst, void **src_pages, int level, vaddr_t vpn)
 	vaddr_t vaddr, next_vpn;
 	int result;
 
+	// Recursive depth-first traversal of source page table.
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
         if (src_pages[idx] == NULL) {
@@ -233,6 +236,8 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 }
 
 // Helper for dump_page_table.
+// Visits each page table entry using recursive depth-first traversal
+// of page table
 static void
 visit_page_table(void **pages, int level, vaddr_t vpn) 
 {
@@ -384,6 +389,13 @@ as_deactivate(void)
 	 * anything. See proc.c for an explanation of why it (might)
 	 * be needed.
 	 */
+	struct addrspace *as;
+
+	as = proc_getas();
+	if (as == NULL) {
+		return;
+	}
+	vm_tlb_erase();	
 }
 
 /*
@@ -572,6 +584,8 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
  * pte = *(struct pte **)tab;
  * *tab = NULL;
  *  
+ * Caller is responsible for locking page table.
+ * 
  * Args:
  *   as: Pointer to addrspace.
  *   vaddr: Virtual address to find.
@@ -596,7 +610,8 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte ***tab)
 	const unsigned shift[] = {15, 10, 5, 0};
 	struct pte *pte;
 	int level;
-
+	
+	KASSERT(lock_do_i_hold(as->pages_lock));
 	// Walk down to leaf page table.
 	vpn = vaddr >> PAGE_OFFSET_BITS;
 	pages = as->pages0;
@@ -658,6 +673,7 @@ struct pte
 	int result;
 	struct pte **tab;
 
+	KASSERT(lock_do_i_hold(as->pages_lock));
 	result = touch_pte(as, vaddr, 1, &tab);
 	if (result) {
 		return NULL;

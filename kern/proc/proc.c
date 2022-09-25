@@ -217,11 +217,14 @@ proc_zombify(struct proc *proc)
 		 * random other process while it's still running...
 		 */
 		struct addrspace *as;
-
-		as = proc->p_addrspace;
-		proc->p_addrspace = NULL;
+		
 		if (proc == curproc) {
+			as = proc_setas(NULL);
 			as_deactivate();
+		}
+		else {
+			as = proc->p_addrspace;
+			proc->p_addrspace = NULL;
 		}
 		as_destroy(as);
 	}
@@ -474,12 +477,9 @@ void teardown_pid_list()
  * Insert newproc into proclist (unsorted).
  *
  * Args:
- *   newproc: Pointer to new process to insert.
- * 
- * Returns:
- *   0 on success, else errno.
+ *   newproc: Pointer to new process to insert..
  */   
-int
+void
 proclist_insert(struct proc *newproc)
 {
 	KASSERT(newproc != NULL);
@@ -487,7 +487,6 @@ proclist_insert(struct proc *newproc)
 	newproc->next = proclist;
 	proclist = newproc;
 	proclist_lock_release();
-	return 0;
 }
 
 /*

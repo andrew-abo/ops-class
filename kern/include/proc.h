@@ -124,7 +124,7 @@ struct addrspace *proc_getas(void);
 struct addrspace *proc_setas(struct addrspace *);
 
 /* Insert newproc into linked list sorted by pid */ 
-int proclist_insert(struct proc *newproc);
+void proclist_insert(struct proc *newproc);
 
 /* Remove pid from proclist */
 struct proc *proclist_remove(pid_t pid);

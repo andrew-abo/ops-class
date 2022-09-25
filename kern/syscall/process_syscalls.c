@@ -59,6 +59,7 @@ int sys_fork(pid_t *pid, struct trapframe *tf)
     }
     result = as_copy(parent->p_addrspace, &(child->p_addrspace));
     if (result) {
+        proc_destroy(child);
         return result;
     }
 

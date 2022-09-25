@@ -76,7 +76,8 @@ dump_coremap()
 	unsigned p;
 	unsigned npages;
 	unsigned status;
-
+	
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
@@ -205,6 +206,7 @@ validate_coremap()
 	unsigned npages;
     unsigned status;
 
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
     KASSERT(next_fit < page_max);
 	for (p = 0; p < page_max;) {
 		if (p > 0) {
@@ -732,6 +734,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		// Page is no longer in TLB, so treat as vanilla write page fault.
 	}
 	// Find or create a page table entry.
+	// We may have arrived here from a page table operation, in which case
+	// don't double lock the page table.
 	page_table_already_locked = lock_do_i_hold(as->pages_lock);
 	if (!page_table_already_locked) {
 		lock_acquire(as->pages_lock);

@@ -127,15 +127,7 @@ common_prog(int nargs, char **args)
 	if (proc == NULL) {
 		return ENOMEM;
 	}
-	
-	result = proclist_insert(proc);
-
-	if (result) {
-		kprintf("common_prog: Failed proclist_insert.\n");
-		proc_destroy(proc);
-        return result;
-	}
-
+	proclist_insert(proc);
 	tc = thread_count;
 
 	result = thread_fork(args[0] /* thread name */,
@@ -144,6 +136,7 @@ common_prog(int nargs, char **args)
 			args /* thread arg */, nargs /* thread arg */);
 	if (result) {
 		kprintf("thread_fork failed: %s\n", strerror(result));
+		proclist_remove(proc->pid);
 		proc_destroy(proc);
 		return result;
 	}

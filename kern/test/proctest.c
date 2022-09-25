@@ -54,7 +54,6 @@ proctest2(int nargs, char **args)
 	struct proc *p;
 	pid_t pids[NEWPROCS];
 	int i;
-	int result;
 
 	// Test creating a sequential list of pids.
 	for (i = 0; i < NEWPROCS; i++) {
@@ -62,8 +61,7 @@ proctest2(int nargs, char **args)
 		newproc[i]->pid = new_pid();
 		pids[i] = newproc[i]->pid;
 		KASSERT(newproc[i] != NULL);
-		result = proclist_insert(newproc[i]);
-		KASSERT(result == 0);
+		proclist_insert(newproc[i]);
 	}
 
 	// Delete one pid in the middle.
@@ -75,8 +73,7 @@ proctest2(int nargs, char **args)
 	KASSERT(p != NULL);
 	p->pid = new_pid();
 	pids[2] = p->pid;
-	result = proclist_insert(p);
-	KASSERT(result == 0);
+	proclist_insert(p);
 	
 	// Delete all the procs.
 	for (i = 0; i < NEWPROCS; i++) {
