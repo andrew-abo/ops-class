@@ -28,7 +28,9 @@
  */
 
 #include <types.h>
+#include <bitmap.h>
 #include <kern/errno.h>
+#include <kern/fcntl.h>
 #include <lib.h>
 #include <spl.h>
 #include <cpu.h>
@@ -37,6 +39,8 @@
 #include <current.h>
 #include <mips/tlb.h>
 #include <addrspace.h>
+#include <stat.h>
+#include <vfs.h>
 #include <vm.h>
 
 // Dummy value to help detect kernel stack overflow.
@@ -52,6 +56,16 @@ static uint32_t *kernel_stack_bottom;  // Pointer to bottom of kernel stack.
 static unsigned used_bytes;
 static unsigned page_max;  // Total number of allocatable pages.
 static unsigned next_fit;  // Coremap index to resume free page search.
+
+// Swap system globals.
+#define SWAP_PATH "lhd0raw:"  
+static struct bitmap *swapmap;
+static struct lock *swapmap_lock;
+static struct vnode *swapdisk_vn;
+static struct lock *swapdisk_lock;
+static size_t swapdisk_pages;
+static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
+
 
 static unsigned get_core_npages(unsigned page_index)
 {
@@ -311,10 +325,46 @@ vm_init_coremap()
 	kprintf("\n");
 }
 
+/*
+ * Initializes virtual memory swap system at boot.
+ */
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+    char vfs_path[PATH_MAX];
+    const mode_t unused_mode = 0x777;
+	struct stat statbuf;
+    int result;
+
+	// vfs_open destructively uses filepath, so pass in a copy.
+	strcpy(vfs_path, SWAP_PATH);
+	result = vfs_open(vfs_path, O_RDWR, unused_mode, &swapdisk_vn);
+	if (result) {
+        swap_enabled = 0;
+        return;
+	}
+	swap_enabled = 1;
+	result = VOP_STAT(swapdisk_vn, &statbuf);
+	swapdisk_pages = (int)(statbuf.st_size / PAGE_SIZE);
+	swapmap = bitmap_create(swapdisk_pages);
+	if (swapmap == NULL) {
+		vfs_close(swapdisk_vn);		
+		panic("vm_bootstrap: Cannot create swapmap.");
+	}
+	swapmap_lock = lock_create("swapmap");
+	if (swapmap_lock == NULL) {
+		bitmap_destroy(swapmap);
+		vfs_close(swapdisk_vn);
+		panic("vm_bootstrap: Cannot create swapmap lock.");
+	}
+	swapdisk_lock = lock_create("swapdisk");
+	if (swapdisk_lock == NULL) {
+		lock_destroy(swapmap_lock);
+		bitmap_destroy(swapmap);
+		vfs_close(swapdisk_vn);
+		panic("vm_bootstrap: Cannot create swapdisklock.");
+	}
+	kprintf("Total swapdisk pages %u\n", swapdisk_pages);
 }
 
 /* 
