@@ -199,3 +199,39 @@ vmtest4(int nargs, char **args)
 	success(TEST161_SUCCESS, SECRET, "vm4");
 	return 0;
 }
+
+// Tests if swap blocks can be written and read.
+int
+vmtest5(int nargs, char **args)
+{
+	vaddr_t vaddr;
+	paddr_t paddr;
+	int result;
+	unsigned i;
+	(void)nargs;
+	(void)args;
+
+	vaddr = alloc_kpages(1);
+	KASSERT(vaddr != 0);
+	paddr = KVADDR_TO_PADDR(vaddr);
+
+	// Fill page with known sequence of bytes.
+	for (i = 0; i < PAGE_SIZE; i++) {
+		*(unsigned char *)(vaddr + i) = i % 256;
+	}
+	result = block_write(0, paddr);
+	KASSERT(result == 0);
+	bzero((void *)vaddr, PAGE_SIZE);
+	result = block_read(0, paddr);
+	KASSERT(result == 0);
+	
+	// Confirm known sequence read back.
+	for (i = 0; i < PAGE_SIZE; i++) {
+		KASSERT(*(unsigned char *)(vaddr + i) == (i % 256));
+	}
+	free_kpages(vaddr);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm5");
+	return 0;
+}

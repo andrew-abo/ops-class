@@ -31,6 +31,7 @@
 #include <bitmap.h>
 #include <kern/errno.h>
 #include <kern/fcntl.h>
+#include <kern/iovec.h>
 #include <lib.h>
 #include <spl.h>
 #include <cpu.h>
@@ -40,6 +41,7 @@
 #include <mips/tlb.h>
 #include <addrspace.h>
 #include <stat.h>
+#include <uio.h>
 #include <vfs.h>
 #include <vm.h>
 
@@ -365,6 +367,70 @@ vm_bootstrap(void)
 		panic("vm_bootstrap: Cannot create swapdisklock.");
 	}
 	kprintf("Total swapdisk pages %u\n", swapdisk_pages);
+}
+
+/*
+ * Read a page from swap disk into physical memory.
+ * 
+ * Args:
+ *   page_index: Page number offset tor read (same as swapmap).
+ *   paddr: Physical address to store data.
+ *
+ * Returns:
+ *   0 on success, else 1 on error.
+ */
+int 
+block_read(unsigned page_index, paddr_t paddr)
+{
+    struct iovec iov;
+	struct uio my_uio;
+	off_t offset;
+	void *buf;
+	int result;
+
+	KASSERT(swap_enabled);
+	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
+	KASSERT(swapdisk_pages > 0);
+	KASSERT(page_index < swapdisk_pages);
+	offset = page_index * PAGE_SIZE;
+	buf = (void *)PADDR_TO_KVADDR(paddr);
+	uio_kinit(&iov, &my_uio, buf, PAGE_SIZE, offset, UIO_READ);
+	lock_acquire(swapdisk_lock);
+	result = VOP_READ(swapdisk_vn, &my_uio);
+	lock_release(swapdisk_lock);
+	return (result || (my_uio.uio_resid != 0));
+}
+
+/*
+ * Write a page to swap disk from physical memory.
+ * 
+ * Args:
+ *   page_index: Page number offset tor write (same as swapmap).
+ *   paddr: Physical address to read data.
+ *
+ * Returns:
+ *   0 on success, else 1 on error.
+ */
+int 
+block_write(unsigned page_index, paddr_t paddr)
+{
+    struct iovec iov;
+	struct uio my_uio;
+	off_t offset;
+	void *buf;
+	int result;
+
+	KASSERT(swap_enabled);
+	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
+	KASSERT(swapdisk_pages > 0);
+	KASSERT(page_index < swapdisk_pages);
+	offset = page_index * PAGE_SIZE;
+	buf = (void *)PADDR_TO_KVADDR(paddr);
+	uio_kinit(&iov, &my_uio, buf, PAGE_SIZE, offset, UIO_WRITE);
+	lock_acquire(swapdisk_lock);
+	result = VOP_WRITE(swapdisk_vn, &my_uio);
+	lock_release(swapdisk_lock);
+	return (result || (my_uio.uio_resid != 0));
 }
 
 /* 

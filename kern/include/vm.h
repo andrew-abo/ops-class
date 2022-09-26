@@ -64,7 +64,12 @@ void vm_init_coremap(void);
 
 void lock_and_dump_coremap(void);
 
+// Initialize swap system.
 void vm_bootstrap(void);
+
+// Read/write pages from/to swap disk.
+int block_write(unsigned page_index, paddr_t paddr);
+int block_read(unsigned page_index, paddr_t paddr);
 
 /* Fault handling function called by trap code */
 int vm_fault(int faulttype, vaddr_t faultaddress);
