@@ -80,7 +80,9 @@ struct segment {
     int access;  // Segment permissions.  See flags above.
 };
 
+// Note: VALID and BACKED will both be zero for first page access.
 #define VM_PTE_VALID 0x1  // Page in memory.
+#define VM_PTE_BACKED 0x2  // Page on disk.  
 
 // Page table entry.
 // We don't store the virtual address which is inherently coded in the indices
@@ -88,6 +90,7 @@ struct segment {
 struct pte {
     uint32_t status;
     paddr_t paddr;
+    unsigned page_index;  // Page number offset on swap disk.
 };
 
 struct addrspace {

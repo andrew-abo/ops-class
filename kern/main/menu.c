@@ -603,6 +603,7 @@ static const char *testmenu[] = {
 	"[vm3] allocate/free random sizes    ",
 	"[vm4] allocate/free random sizes    ",
 	"[vm5] swap block read/write         ",
+	"[vm6] get page via table            ",
 	"[tt1] Thread test 1                 ",
 	"[tt2] Thread test 2                 ",
 	"[tt3] Thread test 3                 ",
@@ -780,6 +781,7 @@ static struct {
 	{"vm3",     vmtest3 },
 	{"vm4",     vmtest4 },
 	{"vm5",     vmtest5 },
+	{"vm6",     vmtest6 },
 #if OPT_NET
 	{ "net",	nettest },
 #endif

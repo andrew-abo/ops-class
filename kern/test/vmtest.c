@@ -235,3 +235,59 @@ vmtest5(int nargs, char **args)
 	success(TEST161_SUCCESS, SECRET, "vm5");
 	return 0;
 }
+
+// Tests get_page_via_table can page in from swapdisk.
+int
+vmtest6(int nargs, char **args)
+{
+	vaddr_t vaddr;
+	paddr_t paddr;
+	int result;
+	unsigned i;
+	struct pte *pte;
+	unsigned page_index = 7;
+	vaddr_t faultaddress = 0x10000;
+	struct addrspace *as;
+	(void)nargs;
+	(void)args;
+
+	// Create a test page on disk.
+	vaddr = alloc_kpages(1);
+	KASSERT(vaddr != 0);
+	paddr = KVADDR_TO_PADDR(vaddr);
+	// Fill page with known sequence of bytes.
+	for (i = 0; i < PAGE_SIZE; i++) {
+		*(unsigned char *)(vaddr + i) = i % 256;
+	}
+	result = block_write(page_index, paddr);
+	// Zero out the memory in case we get assigned the same page.
+	bzero((void *)vaddr, PAGE_SIZE);
+	KASSERT(result == 0);
+	free_kpages(vaddr);
+
+	// Create a page table with pte backed by test page.
+	as = as_create();
+    KASSERT(as != NULL);
+    as_define_region(as, faultaddress, 0x2000, 1, 1, 0);
+    pte = as_create_page(as, faultaddress);
+    KASSERT(pte != NULL);
+	pte->status &= ~VM_PTE_VALID;
+    free_pages(pte->paddr);
+	pte->page_index = page_index;
+	pte->status |= VM_PTE_BACKED;
+
+	// Access the backed page via page table.
+	result = get_page_via_table(as, faultaddress);
+	KASSERT(result == 0);
+
+	// Confirm known sequence read back.
+	vaddr = PADDR_TO_KVADDR(pte->paddr);
+	for (i = 0; i < PAGE_SIZE; i++) {
+		KASSERT(*(unsigned char *)(vaddr + i) == (i % 256));
+	}
+    as_destroy(as);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm6");
+	return 0;
+}

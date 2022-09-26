@@ -767,6 +767,72 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 }
 
 /*
+ * Retrieve page containing faultaddress.
+ *
+ * Allocate a new page in memory.
+ * If page is paged out, then page in from swapdisk.
+ * Update page table.
+ * 
+ * Args:
+ *   as: Pointer to address space.
+ *   faultaddress: Page-aligned address that caused a TLB fault.
+ * 
+ * Returns:
+ *   0 on success, else errno value.
+ */
+int
+get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
+{
+	int page_table_already_locked;
+	struct pte *pte;
+	int result;
+
+	// Find or create a page table entry.
+	// We may have arrived here from a page table operation, in which case
+	// don't double lock the page table.
+	page_table_already_locked = lock_do_i_hold(as->pages_lock);
+	if (!page_table_already_locked) {
+		lock_acquire(as->pages_lock);
+	}
+	pte = as_touch_pte(as, faultaddress);
+	if (pte == NULL) {
+		if (!page_table_already_locked) {
+            lock_release(as->pages_lock);
+		}
+		return ENOMEM;
+	}
+	if (!(pte->status & VM_PTE_VALID)) {
+		pte->paddr = alloc_pages(1, as, faultaddress);
+		if (pte->paddr == (paddr_t)NULL) {
+			if (!page_table_already_locked) {
+                lock_release(as->pages_lock);
+			}
+			return ENOMEM;
+		}
+		if (pte->status & VM_PTE_BACKED) {
+			KASSERT(swap_enabled);
+			result = block_read(pte->page_index, pte->paddr);
+			if (result) {
+                if (!page_table_already_locked) {
+                    lock_release(as->pages_lock);
+                }				
+                return EFAULT;
+			}
+		}
+		// If page is not swapped out, assume this is first access to valid
+		// page, so we allocate but don't populate.
+		pte->status |= VM_PTE_VALID;
+	}
+	/* make sure it's page-aligned */
+	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
+	vm_tlb_insert(pte->paddr, faultaddress);
+	if (!page_table_already_locked) {
+        lock_release(as->pages_lock);
+	}
+	return 0;
+}
+
+/*
  * Handles translation lookaside buffer faults.
  *
  * If faultaddress is in a valid segment for this address space
@@ -774,7 +840,7 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
  * 
  * If page is resident in coremap, proceed.
  * If page has never been accessed, allocate a page.
- * TODO(aabo): If page is swapped out, then swap in.
+ * If page is swapped out then page in.
  * 
  * Finally, update TLB with page and return for retry.
  *
@@ -790,8 +856,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 {
 	struct addrspace *as;
 	int read_request;
-	struct pte *pte;
-	int page_table_already_locked;
+	int result;
 
 	// WARNING: Using kprintf in this function may cause TLB to
 	// behave unexpectedly.
@@ -849,38 +914,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		// Page is no longer in TLB, so treat as vanilla write page fault.
 	}
-	// Find or create a page table entry.
-	// We may have arrived here from a page table operation, in which case
-	// don't double lock the page table.
-	page_table_already_locked = lock_do_i_hold(as->pages_lock);
-	if (!page_table_already_locked) {
-		lock_acquire(as->pages_lock);
-	}
-	pte = as_touch_pte(as, faultaddress);
-	if (pte == NULL) {
-		if (!page_table_already_locked) {
-            lock_release(as->pages_lock);
-		}
-		return ENOMEM;
-	}
-	if (!(pte->status & VM_PTE_VALID)) {
-		// TODO(aabo): Insert swapping logic.
-		// First access such as heap, stack, load_segment, 
-		// so allocate a new page.
-		pte->paddr = alloc_pages(1, as, faultaddress);
-		if (pte->paddr == (paddr_t)NULL) {
-			if (!page_table_already_locked) {
-                lock_release(as->pages_lock);
-			}
-			return ENOMEM;
-		}
-		pte->status |= VM_PTE_VALID;
-	}
-	/* make sure it's page-aligned */
-	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
-	vm_tlb_insert(pte->paddr, faultaddress);
-	if (!page_table_already_locked) {
-        lock_release(as->pages_lock);
+	result = get_page_via_table(as, faultaddress);
+	if (result) {
+		return result;
 	}
 	return 0;
 }
