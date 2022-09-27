@@ -291,3 +291,40 @@ vmtest6(int nargs, char **args)
 	success(TEST161_SUCCESS, SECRET, "vm6");
 	return 0;
 }
+
+// Tests get_page_via_table can create a new page.
+int
+vmtest7(int nargs, char **args)
+{
+	int result;
+	unsigned used_bytes0;
+	vaddr_t faultaddress = 0x10000;
+	struct addrspace *as;
+	(void)nargs;
+	(void)args;
+
+	// Create a page table with pte backed by test page.
+	as = as_create();
+    KASSERT(as != NULL);
+    as_define_region(as, faultaddress, 0x2000, 1, 1, 0);
+    
+    used_bytes0 = coremap_used_bytes();
+
+	// Access valid but non-existing page to trigger creating new page.
+	result = get_page_via_table(as, faultaddress);
+	KASSERT(result == 0);
+
+	// Should be at least one more page used, but possibly more for 
+	// adding new pte.
+	KASSERT(coremap_used_bytes() > used_bytes0);
+
+	// Note: we can't test read/write to the new page because
+	// we have not registered it in the TLB, and if we generate
+	// a TLB fault, this page is not in the kernel address space.
+	
+    as_destroy(as);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm7");
+	return 0;
+}
