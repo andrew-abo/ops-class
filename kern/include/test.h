@@ -148,6 +148,7 @@ int vmtest4(int, char **);
 int vmtest5(int, char **);
 int vmtest6(int, char **);
 int vmtest7(int, char **);
+int vmtest8(int, char **);
 
 /* Routine for running a user-level program. */
 int runprogram(char *progname);

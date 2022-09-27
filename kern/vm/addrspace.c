@@ -127,8 +127,6 @@ struct pte
         return NULL;
     }
 	// Page must not already exist.
-	// TODO(aabo): What if we attempt to create a page that is swapped out?
-	// Add check for pte->backing == NULL?
 	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;

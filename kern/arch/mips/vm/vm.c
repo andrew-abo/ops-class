@@ -462,7 +462,8 @@ alloc_kpages(unsigned npages)
 
 /*
  * Allocates npages of contiguous pages in coremap and assign 
- * to addrspace as at virtual address vaddr.
+ * to addrspace as at virtual address vaddr.  Does not
+ * modify page table.
  * 
  * To allocate a kernel page:
  * paddr = alloc_pages(1, NULL, NULL)
@@ -495,6 +496,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 
 	spinlock_acquire(&coremap_lock);
 
+	// Locate a free block in coremap.
 	p = next_fit;
 	KASSERT(p < page_max);
 	block_pages = get_core_npages(p);
@@ -507,6 +509,8 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		}
 		block_pages = get_core_npages(p);
 	}
+
+	// Update coremap.
 	KASSERT(!(coremap[p].status & VM_CORE_USED));
 	KASSERT(get_core_npages(p) >= npages);
 	paddr = core_idx_to_paddr(p);
@@ -764,6 +768,71 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 		tlb_write(ehi, elo, idx);
 	}
 	splx(spl);
+}
+
+/*
+ * Selects a page for eviction from the coremap.
+ *
+ * Implements the eviction policy for the virtual memory
+ * system.  This is a read-only operation.  Will not
+ * evict any kernel-owned pages.
+ * 
+ * Caller is responsible for locking coremap.
+ *
+ * Returns:
+ *   Physical address of page to evict.
+ */
+static paddr_t
+find_victim_page()
+{
+	unsigned p;
+	unsigned npages;
+	unsigned victim;
+	unsigned user_pages = 0;
+	
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
+
+	// TODO(aabo): Replace simple policy with higher performance policy
+	// such as CLOCK.
+
+	// Select a user space page at random.
+	for (p = 0; p < page_max; p += npages) {
+		npages = get_core_npages(p);
+		if (coremap[p].vaddr >= MIPS_KSEG0) {
+			// Skip kernel pages.
+			continue;
+		}
+		if (!(coremap[p].status & VM_CORE_USED)) {
+			return core_idx_to_paddr(p);
+		}
+		user_pages++;
+	}
+	if (user_pages == 0) {
+        panic("find_victim_page: Could not find any user pages.");
+	}
+	victim = random() % user_pages;
+	for (p = 0; p < page_max; p += npages) {
+		npages = get_core_npages(p);
+		if (coremap[p].vaddr >= MIPS_KSEG0) {
+			// Skip kernel pages.
+			continue;
+		}
+		if (victim == 0) {
+			return core_idx_to_paddr(p);
+		}
+		victim--;
+	}
+	panic("find_victim_page: failed to find victim page.");
+}
+
+paddr_t
+locking_find_victim_page()
+{
+	paddr_t paddr;
+	spinlock_acquire(&coremap_lock);
+	paddr = find_victim_page();
+	spinlock_release(&coremap_lock);
+	return paddr;
 }
 
 /*

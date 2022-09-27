@@ -74,6 +74,7 @@ int get_page_via_table(struct addrspace *as, vaddr_t faultaddress);
 
 /* Fault handling function called by trap code */
 int vm_fault(int faulttype, vaddr_t faultaddress);
+paddr_t locking_find_victim_page(void);
 
 /* Allocate/free kernel heap pages (called by kmalloc/kfree) */
 vaddr_t alloc_kpages(unsigned npages);

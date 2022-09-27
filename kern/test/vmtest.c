@@ -303,7 +303,7 @@ vmtest7(int nargs, char **args)
 	(void)nargs;
 	(void)args;
 
-	// Create a page table with pte backed by test page.
+	// Create a page table with no pages.
 	as = as_create();
     KASSERT(as != NULL);
     as_define_region(as, faultaddress, 0x2000, 1, 1, 0);
@@ -326,5 +326,40 @@ vmtest7(int nargs, char **args)
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm7");
+	return 0;
+}
+
+// Tests a victim page is properly selected.
+int
+vmtest8(int nargs, char **args)
+{
+	struct addrspace *as;
+	paddr_t paddr;
+	unsigned p;
+	unsigned pages = 1000;
+	struct pte *pte;
+	(void)nargs;
+	(void)args;
+
+	// Create a test address space with some user pages.
+	as = as_create();
+    KASSERT(as != NULL);
+
+    // Exhaust memory.
+    for (p = 0; p < pages; p++) {
+        pte = as_create_page(as, 0x1000 * p);
+		if (pte == NULL) {
+			break;
+		}
+	}
+
+	// Invoke eviction policy.
+	paddr = locking_find_victim_page();
+	kprintf("victim paddr = 0x%08x\n", paddr);
+	KASSERT(paddr > 0);
+    as_destroy(as);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm8");
 	return 0;
 }
