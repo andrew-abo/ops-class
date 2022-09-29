@@ -69,6 +69,33 @@ static size_t swapdisk_pages;
 static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
 
 
+/*
+ * Enable/disable swap.
+ *
+ * Only intended for testing to selectively enable/disable
+ * swap.  Do not use in actual operation as enabling swap
+ * without running vm_boostrap will not work.  Also
+ * disabling swap in the middle of operation will corrupt
+ * memory.
+ * 
+ * Args:
+ *   enabled: 0 = disable swap, 1 = enable swap.
+ * 
+ * Returns:
+ *   Previous enabled state.
+ */
+int
+set_swap_enabled(int enabled)
+{
+	int old_state;
+
+	lock_acquire(swapdisk_lock);
+	old_state = swap_enabled;
+	swap_enabled = enabled;
+	lock_release(swapdisk_lock);
+	return old_state;
+}
+
 static unsigned get_core_npages(unsigned page_index)
 {
     return (coremap[page_index].status) & VM_CORE_NPAGES;
@@ -122,7 +149,7 @@ void lock_and_dump_coremap()
 /*
  * Converts coremap index to physical address.
  */
-static paddr_t
+paddr_t
 core_idx_to_paddr(unsigned p)
 {
     return (paddr_t)(p * PAGE_SIZE);
@@ -131,7 +158,7 @@ core_idx_to_paddr(unsigned p)
 /* 
  * Converts physical address to coremap index.
  */
-static unsigned
+unsigned
 paddr_to_core_idx(paddr_t paddr)
 {
     return (unsigned)(paddr / PAGE_SIZE);
@@ -373,14 +400,14 @@ vm_bootstrap(void)
  * Read a page from swap disk into physical memory.
  * 
  * Args:
- *   page_index: Page number offset tor read (same as swapmap).
+ *   block_index: Page number offset tor read (same as swapmap).
  *   paddr: Physical address to store data.
  *
  * Returns:
  *   0 on success, else 1 on error.
  */
 int 
-block_read(unsigned page_index, paddr_t paddr)
+block_read(unsigned block_index, paddr_t paddr)
 {
     struct iovec iov;
 	struct uio my_uio;
@@ -391,8 +418,8 @@ block_read(unsigned page_index, paddr_t paddr)
 	KASSERT(swap_enabled);
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	KASSERT(swapdisk_pages > 0);
-	KASSERT(page_index < swapdisk_pages);
-	offset = page_index * PAGE_SIZE;
+	KASSERT(block_index < swapdisk_pages);
+	offset = block_index * PAGE_SIZE;
 	buf = (void *)PADDR_TO_KVADDR(paddr);
 	uio_kinit(&iov, &my_uio, buf, PAGE_SIZE, offset, UIO_READ);
 	lock_acquire(swapdisk_lock);
@@ -405,14 +432,14 @@ block_read(unsigned page_index, paddr_t paddr)
  * Write a page to swap disk from physical memory.
  * 
  * Args:
- *   page_index: Page number offset tor write (same as swapmap).
+ *   block_index: Page number offset tor write (same as swapmap).
  *   paddr: Physical address to read data.
  *
  * Returns:
  *   0 on success, else 1 on error.
  */
 int 
-block_write(unsigned page_index, paddr_t paddr)
+block_write(unsigned block_index, paddr_t paddr)
 {
     struct iovec iov;
 	struct uio my_uio;
@@ -423,14 +450,144 @@ block_write(unsigned page_index, paddr_t paddr)
 	KASSERT(swap_enabled);
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	KASSERT(swapdisk_pages > 0);
-	KASSERT(page_index < swapdisk_pages);
-	offset = page_index * PAGE_SIZE;
+	KASSERT(block_index < swapdisk_pages);
+	offset = block_index * PAGE_SIZE;
 	buf = (void *)PADDR_TO_KVADDR(paddr);
 	uio_kinit(&iov, &my_uio, buf, PAGE_SIZE, offset, UIO_WRITE);
 	lock_acquire(swapdisk_lock);
 	result = VOP_WRITE(swapdisk_vn, &my_uio);
 	lock_release(swapdisk_lock);
 	return (result || (my_uio.uio_resid != 0));
+}
+
+/*
+ * Selects a page for eviction from the coremap.
+ *
+ * Implements the eviction policy for the virtual memory
+ * system.  This is a read-only operation.  Will not
+ * evict any kernel-owned pages.
+ * 
+ * Caller is responsible for locking coremap.
+ *
+ * Returns:
+ *   Physical address of page to evict.
+ */
+static paddr_t
+find_victim_page()
+{
+	unsigned p;
+	unsigned npages;
+	unsigned victim;
+	unsigned user_pages = 0;
+	
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
+
+	// TODO(aabo): Replace simple policy with higher performance policy
+	// such as CLOCK.
+
+	// Inventory available user pages.
+	for (p = 0; p < page_max; p += npages) {
+		npages = get_core_npages(p);
+		// First choice are pages that became free since we last checked.
+		if (!(coremap[p].status & VM_CORE_USED)) {
+			return core_idx_to_paddr(p);
+		}
+		if (coremap[p].as == NULL) {
+			// Skip kernel pages.
+			continue;
+		}
+		user_pages++;
+	}
+	if (user_pages == 0) {
+        panic("find_victim_page: Could not find any user pages.");
+	}
+	// Choose one of the user pages at random.
+	victim = random() % user_pages;
+	for (p = 0; p < page_max; p += npages) {
+		npages = get_core_npages(p);
+		if (coremap[p].vaddr >= MIPS_KSEG0) {
+			// Skip kernel pages.
+			continue;
+		}
+		if (victim == 0) {
+			return core_idx_to_paddr(p);
+		}
+		victim--;
+	}
+	panic("find_victim_page: failed to find victim page.");
+}
+
+/*
+ * Evicts a userspace page and assigns to new addrspace and
+ * new virtual address.
+ *
+ * Caller is responsible for locking coremap.
+ * 
+ * Args:
+ *   coremap_index: pointer to return coremap index of freed page.
+ *
+ * Returns:
+ *   0 on success, else errno value.
+ */
+int
+evict_page(unsigned *coremap_index)
+{
+	paddr_t paddr;
+	vaddr_t old_vaddr;
+	struct addrspace *old_as;
+	struct pte *old_pte;
+	int old_status;
+	unsigned p;
+	unsigned block_index;
+	int result;
+
+	// Identify a page to evict.
+	spinlock_acquire(&coremap_lock);
+	paddr = find_victim_page();
+	p = paddr_to_core_idx(paddr);
+	old_vaddr = coremap[p].vaddr;
+	old_as = coremap[p].as;
+	old_status = coremap[p].status;
+	// Claim this page for the kernel so on one else evicts it.
+	coremap[p].as = NULL;
+	coremap[p].vaddr = (vaddr_t)NULL;
+	coremap[p].status &= ~(VM_CORE_DIRTY | VM_CORE_ACCESSED);
+	spinlock_release(&coremap_lock);
+
+	old_pte = as_lookup_pte(old_as, old_vaddr);
+
+	// Deactivate page so it is not accessed during page out.
+	lock_acquire(old_as->pages_lock);
+	// TODO(aabo): call tlb_shootdown for multi-thread case?
+	vm_tlb_remove(old_vaddr);
+	
+	// Swap page out if needed.
+	KASSERT(old_pte != NULL);
+	if (!(old_pte->status & VM_PTE_BACKED)) {
+        lock_acquire(swapmap_lock);
+        result = bitmap_alloc(swapmap, &block_index);
+		if (result) {
+			return result;
+		}
+        lock_release(swapmap_lock);
+	} else {
+		block_index = old_pte->block_index;
+	}
+	if ((old_status & VM_CORE_DIRTY) || 
+        !(old_pte->status & VM_PTE_BACKED)) {
+            result = block_write(block_index, paddr);
+			if (result) {
+				return ENOSPC;
+			}
+            old_pte->block_index = block_index;
+            old_pte->status |= VM_PTE_BACKED;
+	}
+	old_pte->status &= ~VM_PTE_VALID;
+	old_pte->paddr = (paddr_t)NULL;
+
+	lock_release(old_as->pages_lock);
+	*coremap_index = p;
+	return 0;
 }
 
 /* 
@@ -490,6 +647,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	unsigned block_pages;
 	unsigned prev;
 	unsigned next;
+	int result;
 
 	KASSERT(npages > 0);
 	KASSERT((as == NULL) || ((as != NULL) && (vaddr < MIPS_KSEG0)));
@@ -504,14 +662,22 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		p = (p + block_pages) % page_max;
 		if (p == next_fit) {
 			// No free pages.
-            spinlock_release(&coremap_lock);
-            return 0;
+			if (!swap_enabled || (npages > 1)) {
+				// Can't handle multi-page evictions, so fail.
+				spinlock_release(&coremap_lock);
+				return 0;
+			}
+			result = evict_page(&p);
+			if (result) {
+				spinlock_release(&coremap_lock);				
+				return 0;
+			}
+			break;
 		}
 		block_pages = get_core_npages(p);
 	}
 
 	// Update coremap.
-	KASSERT(!(coremap[p].status & VM_CORE_USED));
 	KASSERT(get_core_npages(p) >= npages);
 	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
@@ -770,61 +936,6 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 	splx(spl);
 }
 
-/*
- * Selects a page for eviction from the coremap.
- *
- * Implements the eviction policy for the virtual memory
- * system.  This is a read-only operation.  Will not
- * evict any kernel-owned pages.
- * 
- * Caller is responsible for locking coremap.
- *
- * Returns:
- *   Physical address of page to evict.
- */
-static paddr_t
-find_victim_page()
-{
-	unsigned p;
-	unsigned npages;
-	unsigned victim;
-	unsigned user_pages = 0;
-	
-	KASSERT(spinlock_do_i_hold(&coremap_lock));
-
-	// TODO(aabo): Replace simple policy with higher performance policy
-	// such as CLOCK.
-
-	// Select a user space page at random.
-	for (p = 0; p < page_max; p += npages) {
-		npages = get_core_npages(p);
-		if (coremap[p].vaddr >= MIPS_KSEG0) {
-			// Skip kernel pages.
-			continue;
-		}
-		if (!(coremap[p].status & VM_CORE_USED)) {
-			return core_idx_to_paddr(p);
-		}
-		user_pages++;
-	}
-	if (user_pages == 0) {
-        panic("find_victim_page: Could not find any user pages.");
-	}
-	victim = random() % user_pages;
-	for (p = 0; p < page_max; p += npages) {
-		npages = get_core_npages(p);
-		if (coremap[p].vaddr >= MIPS_KSEG0) {
-			// Skip kernel pages.
-			continue;
-		}
-		if (victim == 0) {
-			return core_idx_to_paddr(p);
-		}
-		victim--;
-	}
-	panic("find_victim_page: failed to find victim page.");
-}
-
 paddr_t
 locking_find_victim_page()
 {
@@ -880,7 +991,7 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 		}
 		if (pte->status & VM_PTE_BACKED) {
 			KASSERT(swap_enabled);
-			result = block_read(pte->page_index, pte->paddr);
+			result = block_read(pte->block_index, pte->paddr);
 			if (result) {
                 if (!page_table_already_locked) {
                     lock_release(as->pages_lock);

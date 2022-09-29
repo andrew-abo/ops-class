@@ -645,6 +645,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte ***tab)
             return ENOMEM;
         }
         pte->status = 0;
+		pte->block_index = 0;
         pte->paddr = (paddr_t)NULL;
         pages[idx] = pte;
     }

@@ -90,7 +90,7 @@ struct segment {
 struct pte {
     uint32_t status;
     paddr_t paddr;
-    unsigned page_index;  // Page number offset on swap disk.
+    unsigned block_index;  // Page number offset on swap disk.
 };
 
 struct addrspace {

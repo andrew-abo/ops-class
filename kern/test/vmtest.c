@@ -25,7 +25,9 @@ vmtest1(int nargs, char **args)
 	paddr_t paddr[BLOCKS];
 	int i;
 	unsigned block_size;
+	int swap_enabled;
 
+	swap_enabled = set_swap_enabled(0);
 	used_bytes0 = coremap_used_bytes();
 
 	// Allocate all memory in blocks of uniform sizes.
@@ -54,6 +56,8 @@ vmtest1(int nargs, char **args)
 
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
+	set_swap_enabled(swap_enabled);
+
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm1");
 	return 0;
@@ -71,7 +75,9 @@ vmtest2(int nargs, char **args)
 	paddr_t paddr[BLOCKS];
 	int i;
 	unsigned block_size;
+	int swap_enabled;
 
+	swap_enabled = set_swap_enabled(0);
 	used_bytes0 = coremap_used_bytes();
 
 	// Allocate all memory in blocks of uniform sizes.
@@ -99,6 +105,8 @@ vmtest2(int nargs, char **args)
 
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
+	set_swap_enabled(swap_enabled);
+
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm2");
 	return 0;
@@ -117,7 +125,9 @@ vmtest3(int nargs, char **args)
 	int i;
 	unsigned block_size;
 	unsigned my_used_pages;
+	int swap_enabled;
 
+	swap_enabled = set_swap_enabled(0);
 	used_bytes0 = coremap_used_bytes();
 
     // Allocate all memory in blocks of random sizes up to 32.
@@ -146,6 +156,7 @@ vmtest3(int nargs, char **args)
     free_pages(paddr[0]);
     
     KASSERT(coremap_used_bytes() == used_bytes0);
+	set_swap_enabled(swap_enabled);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm3");
@@ -165,7 +176,9 @@ vmtest4(int nargs, char **args)
 	int i;
 	unsigned block_size;
 	unsigned my_used_pages;
+	int swap_enabled;
 
+	swap_enabled = set_swap_enabled(0);
 	used_bytes0 = coremap_used_bytes();
 
     // Allocate all memory in blocks of random sizes up to 32.
@@ -194,6 +207,7 @@ vmtest4(int nargs, char **args)
     free_pages(paddr[0]);
 
     KASSERT(coremap_used_bytes() == used_bytes0);
+	set_swap_enabled(swap_enabled);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm4");
@@ -245,7 +259,7 @@ vmtest6(int nargs, char **args)
 	int result;
 	unsigned i;
 	struct pte *pte;
-	unsigned page_index = 7;
+	unsigned block_index = 7;
 	vaddr_t faultaddress = 0x10000;
 	struct addrspace *as;
 	(void)nargs;
@@ -259,7 +273,7 @@ vmtest6(int nargs, char **args)
 	for (i = 0; i < PAGE_SIZE; i++) {
 		*(unsigned char *)(vaddr + i) = i % 256;
 	}
-	result = block_write(page_index, paddr);
+	result = block_write(block_index, paddr);
 	// Zero out the memory in case we get assigned the same page.
 	bzero((void *)vaddr, PAGE_SIZE);
 	KASSERT(result == 0);
@@ -273,7 +287,7 @@ vmtest6(int nargs, char **args)
     KASSERT(pte != NULL);
 	pte->status &= ~VM_PTE_VALID;
     free_pages(pte->paddr);
-	pte->page_index = page_index;
+	pte->block_index = block_index;
 	pte->status |= VM_PTE_BACKED;
 
 	// Access the backed page via page table.
@@ -340,6 +354,9 @@ vmtest8(int nargs, char **args)
 	struct pte *pte;
 	(void)nargs;
 	(void)args;
+	int swap_enabled;
+
+	swap_enabled = set_swap_enabled(0);
 
 	// Create a test address space with some user pages.
 	as = as_create();
@@ -358,8 +375,87 @@ vmtest8(int nargs, char **args)
 	kprintf("victim paddr = 0x%08x\n", paddr);
 	KASSERT(paddr > 0);
     as_destroy(as);
+	set_swap_enabled(swap_enabled);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm8");
 	return 0;
 }
+
+#define TEST_PAGES 1024
+
+// Tests a victim page is properly evicted.
+int
+vmtest9(int nargs, char **args)
+{
+	struct addrspace *as;
+	vaddr_t kvaddr;
+	vaddr_t vaddr;
+	paddr_t paddr;
+	unsigned p;
+	struct pte *pte;
+	(void)nargs;
+	(void)args;
+	int result;
+	unsigned core_idx;
+	vaddr_t *core_idx_to_vaddr;
+
+	// Disable swapping while we exhaust memory.
+	set_swap_enabled(0);
+
+	core_idx_to_vaddr = kmalloc(sizeof(vaddr_t) * TEST_PAGES);
+	KASSERT(core_idx_to_vaddr != NULL);
+
+	// Create a test address space with some user pages.
+	as = as_create();
+    KASSERT(as != NULL);
+
+    // Exhaust memory.
+    for (p = 0; p < TEST_PAGES; p++) {
+		vaddr = 0x1000 * p;
+        pte = as_create_page(as, vaddr);
+		if (pte == NULL) {
+			break;
+		}
+		// Write a unique test pattern to each page.
+		*(unsigned *)PADDR_TO_KVADDR(pte->paddr) = p;
+		core_idx = paddr_to_core_idx(pte->paddr);
+		core_idx_to_vaddr[core_idx] = vaddr;
+	}
+
+	// Re-enable swapping.
+	set_swap_enabled(1);
+
+	// Evict a page.
+	result = evict_page(&core_idx);
+	KASSERT(result == 0);
+	paddr = core_idx_to_paddr(core_idx);
+	kvaddr = PADDR_TO_KVADDR(paddr);
+
+	// Zero out the page in memory.
+	bzero((void *)kvaddr, PAGE_SIZE);
+
+	// Page-in from swapdisk.
+	vaddr = core_idx_to_vaddr[core_idx];
+	pte = as_lookup_pte(as, vaddr);
+	KASSERT(pte != NULL);
+	block_read(pte->block_index, paddr);
+	// Check unique test pattern has been restored.
+	KASSERT(*(unsigned *)kvaddr == vaddr / 0x1000);
+
+	free_pages(paddr);
+    as_destroy(as);
+	kfree(core_idx_to_vaddr);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm9");
+	return 0;
+}
+
+// TODO(aabo): test evict_page.
+// disable swap
+// create test addrspace
+// create pages to exhaust memory
+// enable swap
+// evict a page
+// check page contents on disk are correct

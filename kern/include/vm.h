@@ -62,19 +62,24 @@ struct core_page {
 // Initializes physical memory map to enable kmalloc.
 void vm_init_coremap(void);
 
+// Test and debug support.
 void lock_and_dump_coremap(void);
 
 // Initialize swap system.
 void vm_bootstrap(void);
 
+// Do not use: for testing only.
+int set_swap_enabled(int enabled);
+
 // Read/write pages from/to swap disk.
-int block_write(unsigned page_index, paddr_t paddr);
-int block_read(unsigned page_index, paddr_t paddr);
+int block_write(unsigned block_index, paddr_t paddr);
+int block_read(unsigned block_index, paddr_t paddr);
 int get_page_via_table(struct addrspace *as, vaddr_t faultaddress);
 
 /* Fault handling function called by trap code */
 int vm_fault(int faulttype, vaddr_t faultaddress);
 paddr_t locking_find_victim_page(void);
+int evict_page(unsigned *coremap_index);
 
 /* Allocate/free kernel heap pages (called by kmalloc/kfree) */
 vaddr_t alloc_kpages(unsigned npages);
@@ -84,6 +89,8 @@ void free_kpages(vaddr_t vaddr);
 paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
 void free_pages(vaddr_t vaddr);
 void vm_tlb_erase(void);
+unsigned paddr_to_core_idx(paddr_t paddr);
+paddr_t core_idx_to_paddr(unsigned p);
 
 struct addrspace *vm_get_as(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);
