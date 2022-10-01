@@ -299,6 +299,9 @@ destroy_page_table(void **pages, int level)
 			if (pte->status & VM_PTE_VALID) {
                 free_pages(pte->paddr);
             }
+			if (pte->status & VM_PTE_BACKED) {
+                free_swapmap_block(pte->block_index);
+			}
             kfree(pte);
 			continue;
         }
@@ -610,6 +613,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte ***tab)
 	int level;
 	
 	KASSERT(lock_do_i_hold(as->pages_lock));
+
 	// Walk down to leaf page table.
 	vpn = vaddr >> PAGE_OFFSET_BITS;
 	pages = as->pages0;
@@ -672,7 +676,6 @@ struct pte
 	int result;
 	struct pte **tab;
 
-	KASSERT(lock_do_i_hold(as->pages_lock));
 	result = touch_pte(as, vaddr, 1, &tab);
 	if (result) {
 		return NULL;
@@ -683,6 +686,8 @@ struct pte
 /*
  * Read-only look up of page table entry by vaddr.
  *
+ * Caller is responsible for locking as->pages_lock.
+ * 
  * Returns:
  *   Pointer to pte or NULL if not found.
  */
@@ -692,10 +697,8 @@ struct pte
 	int result;
 	struct pte **tab;
 
-	lock_acquire(as->pages_lock);
 	result = touch_pte(as, vaddr, 0, &tab);
 	KASSERT(result == 0);
-	lock_release(as->pages_lock);
 	if (tab == NULL) {
 		return NULL;
 	}

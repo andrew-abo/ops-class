@@ -96,6 +96,36 @@ set_swap_enabled(int enabled)
 	return old_state;
 }
 
+/*
+ * Marks block_index free in swapmap.
+ */
+void
+free_swapmap_block(int block_index)
+{
+	lock_acquire(swapmap_lock);
+	bitmap_unmark(swapmap, block_index);
+	lock_release(swapmap_lock);
+}
+
+/*
+ * Returns number of used pages on swap disk.
+ */
+size_t
+swap_used_pages()
+{
+	size_t p;
+	size_t used = 0;
+
+	lock_acquire(swapmap_lock);
+	for (p = 0; p < swapdisk_pages; p++) {
+        if (bitmap_isset(swapmap, p)) {
+			used++;
+		}
+	}
+	lock_release(swapmap_lock);
+	return used;
+}
+
 static unsigned get_core_npages(unsigned page_index)
 {
     return (coremap[page_index].status) & VM_CORE_NPAGES;
@@ -124,8 +154,8 @@ dump_coremap()
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
-		kprintf("coremap[%3u]: status=0x%08x, vaddr=0x%08x, npages=%u\n", p, status, 
-		  coremap[p].vaddr, npages);
+		kprintf("coremap[%3u]: status=0x%08x, paddr=0x%08x, vaddr=0x%08x, npages=%u\n", 
+		  p, status, core_idx_to_paddr(p), coremap[p].vaddr, npages);
 	}
 }
 
@@ -540,11 +570,14 @@ evict_page(unsigned *coremap_index)
 	unsigned p;
 	unsigned block_index;
 	int result;
+	int page_table_already_locked;
 
 	// Identify a page to evict.
 	spinlock_acquire(&coremap_lock);
 	paddr = find_victim_page();
 	p = paddr_to_core_idx(paddr);
+	// We assume we are evicting exactly one page.
+	KASSERT(get_core_npages(p) == 1);
 	old_vaddr = coremap[p].vaddr;
 	old_as = coremap[p].as;
 	old_status = coremap[p].status;
@@ -554,12 +587,20 @@ evict_page(unsigned *coremap_index)
 	coremap[p].status &= ~(VM_CORE_DIRTY | VM_CORE_ACCESSED);
 	spinlock_release(&coremap_lock);
 
-	old_pte = as_lookup_pte(old_as, old_vaddr);
+	// We may have arrived here from a page table operation, in which
+	// case do not re-lock the page table, such as:
+	// * get_page_via_table
+	// * as_create_pagee
+	// * as_copy
+	page_table_already_locked = lock_do_i_hold(old_as->pages_lock);
+	if (!page_table_already_locked) {
+        lock_acquire(old_as->pages_lock);
+	}
 
 	// Deactivate page so it is not accessed during page out.
-	lock_acquire(old_as->pages_lock);
 	// TODO(aabo): call tlb_shootdown for multi-thread case?
 	vm_tlb_remove(old_vaddr);
+	old_pte = as_lookup_pte(old_as, old_vaddr);
 	
 	// Swap page out if needed.
 	KASSERT(old_pte != NULL);
@@ -585,7 +626,10 @@ evict_page(unsigned *coremap_index)
 	old_pte->status &= ~VM_PTE_VALID;
 	old_pte->paddr = (paddr_t)NULL;
 
-	lock_release(old_as->pages_lock);
+	if (!page_table_already_locked) {
+        lock_release(old_as->pages_lock);
+	}
+
 	*coremap_index = p;
 	return 0;
 }
@@ -662,16 +706,18 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		p = (p + block_pages) % page_max;
 		if (p == next_fit) {
 			// No free pages.
+			spinlock_release(&coremap_lock);				
 			if (!swap_enabled || (npages > 1)) {
 				// Can't handle multi-page evictions, so fail.
-				spinlock_release(&coremap_lock);
 				return 0;
 			}
 			result = evict_page(&p);
 			if (result) {
-				spinlock_release(&coremap_lock);				
 				return 0;
 			}
+			spinlock_acquire(&coremap_lock);
+			block_pages = 1;
+			used_bytes -= PAGE_SIZE;
 			break;
 		}
 		block_pages = get_core_npages(p);
@@ -685,7 +731,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	vaddr_direct = PADDR_TO_KVADDR(paddr);
 	bzero((void *)vaddr_direct, npages * PAGE_SIZE);
 	used_bytes += npages * PAGE_SIZE;
-	coremap[p].status = set_core_status(1, 0, 0, npages);
+	coremap[p].status = set_core_status(/*used=*/1, 0, 0, npages);
 	coremap[p].as = as;
 	if (as == NULL) {
 		// Kernel pages don't have an addrsapce.
@@ -706,7 +752,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 	if (p == page_max) {
 		p = 0;
 	} else if (block_pages > npages) {
-		coremap[p].status = set_core_status(0, 0, 0, block_pages - npages);
+		coremap[p].status = set_core_status(/*used=*/0, 0, 0, block_pages - npages);
 		coremap[p].as = NULL;
 		coremap[p].vaddr = (vaddr_t)NULL;
 		coremap[p].prev = prev;
@@ -859,7 +905,6 @@ flag_page_as_dirty(vaddr_t vaddr)
 	KASSERT(vaddr < MIPS_KSEG0);
 
 	spinlock_acquire(&coremap_lock);
-
 	spl = splhigh();
 	tlb_idx = tlb_probe(vaddr & PAGE_FRAME, 0);
 	if (tlb_idx < 0) {
@@ -874,38 +919,10 @@ flag_page_as_dirty(vaddr_t vaddr)
     p = paddr_to_core_idx(paddr);
     coremap[p].status |= VM_CORE_DIRTY;
     splx(spl);
-
     spinlock_release(&coremap_lock);
+
     return 0;
 }
-
-/*
-static void
-vm_tlb_dump()
-{
-	int spl;
-	uint32_t entryhi, entrylo;
-	vaddr_t vaddr;
-	paddr_t paddr;
-	int dirty;
-	int valid;
-
-	spl = splhigh();
-	kprintf("vm_tlb_dump:\n");
-	for (int idx = 0; idx < NUM_TLB; idx++) {
-		tlb_read(&entryhi, &entrylo, idx);
-		vaddr = entryhi & TLBHI_VPAGE;
-		paddr = entrylo & TLBLO_PPAGE;
-		dirty = entrylo & TLBLO_DIRTY ? 1 : 0;
-		valid = entrylo & TLBLO_VALID ? 1 : 0;
-		if (valid) {
-		  kprintf("[%2d] v0x%08x -> p0x%08x, dirty=%d, valid=%d, 0x%x\n", idx, 
-		    vaddr, paddr, dirty, valid, entrylo);
-		}
-	}
-	splx(spl);
-}
-*/
 
 /*
  * Inserts a valid page table entry into translation lookaside buffer.
@@ -969,7 +986,9 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 
 	// Find or create a page table entry.
 	// We may have arrived here from a page table operation, in which case
-	// don't double lock the page table.
+	// don't double lock the page table, such as:
+	// * as_copy
+    // * as_create_page
 	page_table_already_locked = lock_do_i_hold(as->pages_lock);
 	if (!page_table_already_locked) {
 		lock_acquire(as->pages_lock);

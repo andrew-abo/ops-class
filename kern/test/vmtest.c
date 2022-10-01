@@ -452,10 +452,47 @@ vmtest9(int nargs, char **args)
 	return 0;
 }
 
-// TODO(aabo): test evict_page.
-// disable swap
-// create test addrspace
-// create pages to exhaust memory
-// enable swap
-// evict a page
-// check page contents on disk are correct
+// Tests we can read/write more pages than are in physical memory.
+//
+// Note: test with ramsize=1M to ensure we run cause page outs.
+//
+int
+vmtest10(int nargs, char **args)
+{
+	struct addrspace *as;
+	vaddr_t vaddr;
+	unsigned p;
+	struct pte *pte;
+	(void)nargs;
+	(void)args;
+	size_t swap0, swap1;
+	size_t mem0, mem1;
+	unsigned test_pages = 1000;
+
+	mem0 = coremap_used_bytes();
+	swap0 = swap_used_pages();
+
+	// Create a test address space with some user pages.
+	as = as_create();
+    KASSERT(as != NULL);
+
+    // Exhaust memory to cause some page evictions.
+    for (p = 0; p < test_pages; p++) {
+		vaddr = 0x1000 * p;
+        pte = as_create_page(as, vaddr);
+		KASSERT(pte != NULL);
+		// Write a unique test pattern to each page.
+		*(unsigned *)PADDR_TO_KVADDR(pte->paddr) = p;
+	}
+
+	// Clean up.
+    as_destroy(as);
+	mem1 = coremap_used_bytes();
+	swap1 = swap_used_pages();
+	KASSERT(swap0 == swap1);
+	KASSERT(mem0 == mem1);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm10");
+	return 0;
+}
