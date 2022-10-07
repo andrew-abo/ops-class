@@ -500,9 +500,9 @@ block_write(unsigned block_index, paddr_t paddr)
  * Caller is responsible for locking coremap.
  *
  * Returns:
- *   Physical address of page to evict.
+ *   coremap index of freed page, else 0 if no pages available.
  */
-static paddr_t
+static unsigned
 find_victim_page()
 {
 	unsigned p;
@@ -520,7 +520,7 @@ find_victim_page()
 		npages = get_core_npages(p);
 		// First choice are pages that became free since we last checked.
 		if (!(coremap[p].status & VM_CORE_USED)) {
-			return core_idx_to_paddr(p);
+			return p;
 		}
 		if (coremap[p].as == NULL) {
 			// Skip kernel pages.
@@ -529,9 +529,9 @@ find_victim_page()
 		user_pages++;
 	}
 	if (user_pages == 0) {
-        panic("find_victim_page: Could not find any user pages.");
+        return 0;
 	}
-	// Choose one of the user pages at random.
+	// Choose one of the occupied user pages at random.
 	victim = random() % user_pages;
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
@@ -540,7 +540,7 @@ find_victim_page()
 			continue;
 		}
 		if (victim == 0) {
-			return core_idx_to_paddr(p);
+			return p;
 		}
 		victim--;
 	}
@@ -548,11 +548,48 @@ find_victim_page()
 }
 
 /*
- * Evicts a userspace page and assigns to new addrspace and
- * new virtual address.
+ * Swap out a page if needed.
  *
- * Caller is responsible for locking coremap.
+ * Args:
+ *   pte: Pointer to page table entry of page to maybe swap out.
+ *   dirty: 1 if page has been modified, else 0.
  * 
+ * Returns:
+ *   0 on success else errno.
+ */
+static int
+maybe_swap_out(struct pte *pte, int dirty) {
+	unsigned block_index;
+	int result;
+
+	// Swap page out if needed.
+	KASSERT(pte != NULL);
+	if (!(pte->status & VM_PTE_BACKED)) {
+        lock_acquire(swapmap_lock);
+        result = bitmap_alloc(swapmap, &block_index);
+		if (result) {
+			return result;
+		}
+        lock_release(swapmap_lock);
+	} else {
+		block_index = pte->block_index;
+	}
+	if (dirty || !(pte->status & VM_PTE_BACKED)) {
+        result = block_write(block_index, pte->paddr);
+        if (result) {
+            return ENOSPC;
+        }
+        pte->block_index = block_index;
+        pte->status |= VM_PTE_BACKED;
+	}
+	pte->status &= ~VM_PTE_VALID;
+	pte->paddr = (paddr_t)NULL;
+	return 0;
+}
+
+/*
+ * Finds and evicts a userspace page.
+ *
  * Args:
  *   coremap_index: pointer to return coremap index of freed page.
  *
@@ -562,20 +599,23 @@ find_victim_page()
 int
 evict_page(unsigned *coremap_index)
 {
-	paddr_t paddr;
 	vaddr_t old_vaddr;
 	struct addrspace *old_as;
 	struct pte *old_pte;
 	int old_status;
-	unsigned p;
-	unsigned block_index;
-	int result;
-	int page_table_already_locked;
+	int p;
+
+	// TODO(aabo): handle multi-page eviction
+	// What if kernel requests a multi-page allocation but there's no pages left?
+	// We need to evict multiple contiguous pages from the coremap.
 
 	// Identify a page to evict.
 	spinlock_acquire(&coremap_lock);
-	paddr = find_victim_page();
-	p = paddr_to_core_idx(paddr);
+	p = find_victim_page();
+	if (p == 0) {
+		spinlock_release(&coremap_lock);
+		return ENOMEM;
+	}
 	// We assume we are evicting exactly one page.
 	KASSERT(get_core_npages(p) == 1);
 	old_vaddr = coremap[p].vaddr;
@@ -585,120 +625,44 @@ evict_page(unsigned *coremap_index)
 	coremap[p].as = NULL;
 	coremap[p].vaddr = (vaddr_t)NULL;
 	coremap[p].status &= ~(VM_CORE_DIRTY | VM_CORE_ACCESSED);
+	coremap[p].status |= VM_CORE_USED;
 	spinlock_release(&coremap_lock);
 
-	// We may have arrived here from a page table operation, in which
-	// case do not re-lock the page table, such as:
-	// * get_page_via_table
-	// * as_create_pagee
-	// * as_copy
-	page_table_already_locked = lock_do_i_hold(old_as->pages_lock);
-	if (!page_table_already_locked) {
+	KASSERT(old_as != NULL);
+
+	if (old_status & VM_CORE_USED) {
         lock_acquire(old_as->pages_lock);
-	}
-
-	// Deactivate page so it is not accessed during page out.
-	// TODO(aabo): call tlb_shootdown for multi-thread case?
-	vm_tlb_remove(old_vaddr);
-	old_pte = as_lookup_pte(old_as, old_vaddr);
-	
-	// Swap page out if needed.
-	KASSERT(old_pte != NULL);
-	if (!(old_pte->status & VM_PTE_BACKED)) {
-        lock_acquire(swapmap_lock);
-        result = bitmap_alloc(swapmap, &block_index);
-		if (result) {
-			return result;
-		}
-        lock_release(swapmap_lock);
-	} else {
-		block_index = old_pte->block_index;
-	}
-	if ((old_status & VM_CORE_DIRTY) || 
-        !(old_pte->status & VM_PTE_BACKED)) {
-            result = block_write(block_index, paddr);
-			if (result) {
-				return ENOSPC;
-			}
-            old_pte->block_index = block_index;
-            old_pte->status |= VM_PTE_BACKED;
-	}
-	old_pte->status &= ~VM_PTE_VALID;
-	old_pte->paddr = (paddr_t)NULL;
-
-	if (!page_table_already_locked) {
+        // Deactivate page so it is not accessed during page out.
+        // TODO(aabo): call tlb_shootdown for multi-CPU case.
+        vm_tlb_remove(old_vaddr);
+        old_pte = as_lookup_pte(old_as, old_vaddr);
+        maybe_swap_out(old_pte, old_status & VM_CORE_DIRTY);
         lock_release(old_as->pages_lock);
 	}
-
 	*coremap_index = p;
 	return 0;
 }
 
-/* 
- * Allocate npages of memory from kernel virtual address space.
- *
- * Uses coremap as implicit free list and allocates using a next fit
- * policy.  Fit search is resumed from next_fit index each call and
- * rolls over at page_max.
- *
- * Args:
- *   npages: Number of contiguous pages to allocate.
- * 
- * Returns:
- *   Virtual address from kernel segment of first page, else NULL
- *   if unsuccessful.
- */
-vaddr_t
-alloc_kpages(unsigned npages)
-{
-	paddr_t paddr;
-
-	vm_can_sleep();
-	paddr = alloc_pages(npages, NULL, (vaddr_t)NULL);
-	if (paddr == 0) {
-		return 0;
-	}
-	return PADDR_TO_KVADDR(paddr);
-}
-
 /*
- * Allocates npages of contiguous pages in coremap and assign 
- * to addrspace as at virtual address vaddr.  Does not
- * modify page table.
- * 
- * To allocate a kernel page:
- * paddr = alloc_pages(1, NULL, NULL)
+ * Returns coremap index of contiguous block of npages.
+ *
+ * Caller is responsible for locking coremap.
  * 
  * Args:
- *   npages: Number of contiguous pages to allocate.
- *   as: Pointer to address space to assign to.
- *   vaddr: Virtual address to assign to first page.
- *          If as==NULL or vaddr==NULL, then vaddr will be
- *          direct mapped to KSEG0.
+ *   npages: Number of contiguous pages to find.
  * 
  * Returns:
- *   Physical address of first page on success, else 0.
- *   We can use physical address of zero as an error condition because
- *   the exception handler is stored there and so we should
- *   never be returning zero (at least on MIPS).
+ *   Coremap index > 0 if successful, else 0.
  */
-paddr_t 
-alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
+static unsigned 
+get_ppages(unsigned npages)
 {
-	paddr_t paddr;
-	vaddr_t vaddr_direct;
     unsigned p;  // Page index into coremap.
 	unsigned block_pages;
-	unsigned prev;
-	unsigned next;
-	int result;
 
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
 	KASSERT(npages > 0);
-	KASSERT((as == NULL) || ((as != NULL) && (vaddr < MIPS_KSEG0)));
 
-	spinlock_acquire(&coremap_lock);
-
-	// Locate a free block in coremap.
 	p = next_fit;
 	KASSERT(p < page_max);
 	block_pages = get_core_npages(p);
@@ -706,32 +670,48 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		p = (p + block_pages) % page_max;
 		if (p == next_fit) {
 			// No free pages.
-			spinlock_release(&coremap_lock);				
-			if (!swap_enabled || (npages > 1)) {
-				// Can't handle multi-page evictions, so fail.
-				return 0;
-			}
-			result = evict_page(&p);
-			if (result) {
-				return 0;
-			}
-			spinlock_acquire(&coremap_lock);
-			block_pages = 1;
-			used_bytes -= PAGE_SIZE;
-			break;
+			return 0;
 		}
 		block_pages = get_core_npages(p);
 	}
+	return p;
+}
 
-	// Update coremap.
-	KASSERT(get_core_npages(p) >= npages);
+/*
+ * Assign pages at coremap index p to addrspace as @ vaddr.
+ *
+ * Caller is responsible for locking coremap.
+ * 
+ * Args:
+ *   p: coremap index to assign to.
+ *   npages: Number of pages to assign.
+ *   as: Address space that will own the page.
+ *   vaddr: Virtual address of the page.
+ * 
+ * Returns:
+ *   Physical address of assigned block.
+ */
+static paddr_t
+coremap_assign_pages(unsigned p, unsigned npages, struct addrspace *as, vaddr_t vaddr)
+{
+	paddr_t paddr;
+	vaddr_t vaddr_direct;
+	unsigned block_pages;
+	unsigned prev;
+	unsigned next;
+
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
+	KASSERT((as == NULL) || ((as != NULL) && (vaddr < MIPS_KSEG0)));
+
+	block_pages = get_core_npages(p);
+	KASSERT(block_pages >= npages);
 	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	vaddr_direct = PADDR_TO_KVADDR(paddr);
 	bzero((void *)vaddr_direct, npages * PAGE_SIZE);
 	used_bytes += npages * PAGE_SIZE;
-	coremap[p].status = set_core_status(/*used=*/1, 0, 0, npages);
+	coremap[p].status =	set_core_status(/*used=*/1, 0, 0, npages);
 	coremap[p].as = as;
 	if (as == NULL) {
 		// Kernel pages don't have an addrsapce.
@@ -762,10 +742,85 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 		}
 	}
 	next_fit = p;
-
-	spinlock_release(&coremap_lock);
-
+	
 	return paddr;
+}
+
+/*
+ * Allocates npages of contiguous pages in coremap and assign 
+ * to addrspace as at virtual address vaddr.  Does not
+ * modify page table.
+ * 
+ * To allocate a kernel page:
+ * paddr = alloc_pages(1, NULL, NULL)
+ * 
+ * Args:
+ *   npages: Number of contiguous pages to allocate.
+ *   as: Pointer to address space to assign to.
+ *   vaddr: Virtual address to assign to first page.
+ *          If as==NULL or vaddr==NULL, then vaddr will be
+ *          direct mapped to KSEG0.
+ * 
+ * Returns:
+ *   Physical address of first page on success, else 0.
+ *   We can use physical address of zero as an error condition because
+ *   the exception handler is stored there and so we should
+ *   never be returning zero (at least on MIPS).
+ */
+paddr_t 
+alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
+{
+	paddr_t paddr = 0;
+    unsigned p;  // Page index into coremap.
+	int result;
+
+    spinlock_acquire(&coremap_lock);
+	p = get_ppages(npages);
+
+	if (p == 0) {
+        spinlock_release(&coremap_lock);
+        if (swap_enabled) {
+            result = evict_page(&p);
+            if (result != 0) {
+                // Could not allocate a page.
+                return 0;
+            }
+            spinlock_acquire(&coremap_lock);
+		} else {
+			// Could not allocate a page.
+			return 0;
+		}
+	}
+
+	paddr = coremap_assign_pages(p, npages, as, vaddr);	
+	spinlock_release(&coremap_lock);
+	return paddr;
+}
+
+/* 
+ * Allocate npages of memory from kernel virtual address space.
+ *
+ * Uses coremap as implicit free list and allocates using a next fit
+ * policy.  Fit search is resumed from next_fit index each call and
+ * rolls over at page_max.
+ *
+ * Args:
+ *   npages: Number of contiguous pages to allocate.
+ * 
+ * Returns:
+ *   Virtual address from kernel segment of first page, else NULL
+ *   if unsuccessful.
+ */
+vaddr_t
+alloc_kpages(unsigned npages)
+{
+	paddr_t paddr;
+
+	paddr = alloc_pages(npages, NULL, (vaddr_t)NULL);
+	if (paddr == 0) {
+		return 0;
+	}
+	return PADDR_TO_KVADDR(paddr);
 }
 
 /*
@@ -980,56 +1035,38 @@ locking_find_victim_page()
 int
 get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 {
-	int page_table_already_locked;
 	struct pte *pte;
 	int result;
 
-	// Find or create a page table entry.
-	// We may have arrived here from a page table operation, in which case
-	// don't double lock the page table, such as:
-	// * as_copy
-    // * as_create_page
-	page_table_already_locked = lock_do_i_hold(as->pages_lock);
-	if (!page_table_already_locked) {
-		lock_acquire(as->pages_lock);
-	}
+	lock_acquire(as->pages_lock);	
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
-		if (!page_table_already_locked) {
-            lock_release(as->pages_lock);
-		}
+		lock_release(as->pages_lock);
 		return ENOMEM;
 	}
 	if (!(pte->status & VM_PTE_VALID)) {
-		pte->paddr = alloc_pages(1, as, faultaddress);
-		if (pte->paddr == (paddr_t)NULL) {
-			if (!page_table_already_locked) {
-                lock_release(as->pages_lock);
-			}
-			return ENOMEM;
-		}
+        // We must release our page table before requesting memory.
+		// Otherwise eviction can deadlock if there is a mutual
+		// eviction from the victim address space.
+		lock_release(as->pages_lock);
+        pte->paddr = alloc_pages(1, as, faultaddress);
+        lock_acquire(as->pages_lock);
 		if (pte->status & VM_PTE_BACKED) {
-			KASSERT(swap_enabled);
-			result = block_read(pte->block_index, pte->paddr);
-			if (result) {
-                if (!page_table_already_locked) {
-                    lock_release(as->pages_lock);
-                }				
-                return EFAULT;
-			}
-		}
-		// If page is not swapped out, assume this is first access to valid
-		// page, so we allocate but don't populate.
-		pte->status |= VM_PTE_VALID;
-	}
-	/* make sure it's page-aligned */
+            KASSERT(swap_enabled);
+            result = block_read(pte->block_index, pte->paddr);
+            if (result) {
+                return EIO;
+            }
+        }		
+    }
 	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
+	pte->status |= VM_PTE_VALID;
 	vm_tlb_insert(pte->paddr, faultaddress);
-	if (!page_table_already_locked) {
-        lock_release(as->pages_lock);
-	}
+	lock_release(as->pages_lock);
 	return 0;
 }
+
+
 
 /*
  * Handles translation lookaside buffer faults.
@@ -1082,6 +1119,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		 * in boot. Return EFAULT so as to panic instead of
 		 * getting into an infinite faulting loop.
 		 */
+		panic("vm_fault: curproc == NULL");
 		return EFAULT;
 	}
 
@@ -1091,6 +1129,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		 * No address space set up. This is probably also a
 		 * kernel fault early in boot.
 		 */
+		panic("vm_fault: as == NULL");
 		return EFAULT;
 	}
 
@@ -1099,6 +1138,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	read_request = faulttype == VM_FAULT_READ;
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
+		panic("vm_fault: operation not valid");
 		return EFAULT;
 	}
 	faultaddress &= PAGE_FRAME;

@@ -283,7 +283,7 @@ vmtest6(int nargs, char **args)
 	as = as_create();
     KASSERT(as != NULL);
     as_define_region(as, faultaddress, 0x2000, 1, 1, 0);
-    pte = as_create_page(as, faultaddress);
+    pte = create_test_page(as, faultaddress);
     KASSERT(pte != NULL);
 	pte->status &= ~VM_PTE_VALID;
     free_pages(pte->paddr);
@@ -364,7 +364,7 @@ vmtest8(int nargs, char **args)
 
     // Exhaust memory.
     for (p = 0; p < pages; p++) {
-        pte = as_create_page(as, 0x1000 * p);
+        pte = create_test_page(as, 0x1000 * p);
 		if (pte == NULL) {
 			break;
 		}
@@ -413,7 +413,7 @@ vmtest9(int nargs, char **args)
     // Exhaust memory.
     for (p = 0; p < TEST_PAGES; p++) {
 		vaddr = 0x1000 * p;
-        pte = as_create_page(as, vaddr);
+        pte = create_test_page(as, vaddr);
 		if (pte == NULL) {
 			break;
 		}
@@ -479,7 +479,7 @@ vmtest10(int nargs, char **args)
     // Exhaust memory to cause some page evictions.
     for (p = 0; p < test_pages; p++) {
 		vaddr = 0x1000 * p;
-        pte = as_create_page(as, vaddr);
+        pte = create_test_page(as, vaddr);
 		KASSERT(pte != NULL);
 		// Write a unique test pattern to each page.
 		*(unsigned *)PADDR_TO_KVADDR(pte->paddr) = p;

@@ -38,6 +38,9 @@
 #include <err.h>
 #include <test/quint.h>
 
+// Number of parallel processes to spawn.
+#define NUM_PROCESS 2
+
 static
 pid_t
 spawnv(const char *prog, char **argv)
@@ -83,7 +86,7 @@ dowait(int index, int pid)
 void
 quint(const char *prog)
 {
-	pid_t pids[5];
+	pid_t pids[NUM_PROCESS];
 	int i, failures = 0;
 	char *args[2];
 
@@ -91,13 +94,13 @@ quint(const char *prog)
 	args[0]=(char *)prog;
 	args[1]=NULL;
 
-	warnx("Starting: running five copies of %s...", prog);
+	warnx("Starting: running %d copies of %s...", NUM_PROCESS, prog);
 
-	for (i=0; i<5; i++) {
+	for (i=0; i<NUM_PROCESS; i++) {
 		pids[i]=spawnv(args[0], args);
 	}
 
-	for (i=0; i<5; i++) {
+	for (i=0; i<NUM_PROCESS; i++) {
 		failures += dowait(i, pids[i]);
 	}
 

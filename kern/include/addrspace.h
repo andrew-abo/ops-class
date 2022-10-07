@@ -82,13 +82,15 @@ struct segment {
 
 // Note: VALID and BACKED will both be zero for first page access.
 #define VM_PTE_VALID 0x1  // Page in memory.
-#define VM_PTE_BACKED 0x2  // Page on disk.  
+#define VM_PTE_BACKED 0x2  // Page on disk.
+
+typedef uint32_t pte_status_t;
 
 // Page table entry.
 // We don't store the virtual address which is inherently coded in the indices
 // of the multi-level page tables.
 struct pte {
-    uint32_t status;
+    pte_status_t status;  // {BACKED, VALID, BLOCK_INDEX} bits.
     paddr_t paddr;
     unsigned block_index;  // Page number offset on swap disk.
 };
@@ -185,9 +187,7 @@ struct pte *as_touch_pte(struct addrspace *as, vaddr_t vaddr);
 struct pte *as_lookup_pte(struct addrspace *as, vaddr_t vaddr);
 void dump_page_table(struct addrspace *as);
 void dump_segments(struct addrspace *as);
-struct pte *as_create_page(struct addrspace *as, vaddr_t vaddr);
 void as_destroy_page(struct addrspace *as, vaddr_t vaddr);
 int as_validate_page_table(struct addrspace *as);
-void vm_can_sleep(void);
 
 #endif /* _ADDRSPACE_H_ */

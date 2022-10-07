@@ -34,6 +34,7 @@
 #include <cdefs.h>
 #include <kern/secret.h>
 
+#include <addrspace.h>
 #include "opt-synchprobs.h"
 #include "opt-automationtest.h"
 
@@ -231,5 +232,10 @@ void random_spinner(uint32_t);
 #endif
 
 static inline void silent(const char * fmt, ...) { (void)fmt; };
+
+/*
+ * Address space helpers.
+ */
+struct pte *create_test_page(struct addrspace *as, vaddr_t vaddr);
 
 #endif /* _TEST_H_ */

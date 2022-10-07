@@ -8,8 +8,51 @@
 #include <types.h>
 #include <lib.h>
 #include <addrspace.h>
+#include <synch.h>
 #include <test.h>
 #include <kern/test161.h>
+
+
+/*
+ * Only for directed testing purposes.
+ *
+ * Creates a new physical and corresponding virtual page.
+ *
+ * Args:
+ *   as: Pointer to address space to create page in.
+ *   vaddr: Virtual address to assign.
+ * 
+ * Returns:
+ *   Pointer to page table entry, else NULL if unsuccessful.
+ */
+struct pte 
+*create_test_page(struct addrspace *as, vaddr_t vaddr)
+{
+    paddr_t paddr;
+	struct pte *pte;
+	
+	vaddr &= PAGE_FRAME;
+	// Must be a user space virtual address.
+	KASSERT(vaddr < MIPS_KSEG0);
+    paddr = alloc_pages(1, as, vaddr);
+    if (paddr == (paddr_t)NULL) {
+        return NULL;
+    }
+	lock_acquire(as->pages_lock);
+    pte = as_touch_pte(as, vaddr);
+    if (pte == NULL) {
+		free_pages(paddr);
+		lock_release(as->pages_lock);
+        return NULL;
+    }
+	// Page must not already exist.
+	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
+    pte->paddr = paddr;
+	pte->status = VM_PTE_VALID;
+	lock_release(as->pages_lock);
+    return pte;
+}
+
 
 // Tests addrspace can be created and destroyed.
 int
@@ -184,32 +227,35 @@ addrspacetest7(int nargs, char **args)
     kprintf("Starting as7 test...\n");
     as = as_create();
     KASSERT(as != NULL);
-    pte0 = as_create_page(as, 0x00000000);
-    KASSERT(pte0 != NULL);
 
+    // Create and lookup a page at vaddr=0x0.
+    pte0 = create_test_page(as, 0x00000000);
+    KASSERT(pte0 != NULL);
+    lock_acquire(as->pages_lock);
     pte1 = as_touch_pte(as, 0x00000000);
+    lock_release(as->pages_lock);
     KASSERT(pte0 == pte1);
 
-    pte0 = as_create_page(as, 0x00001000);
+    pte0 = create_test_page(as, 0x00001000);
     KASSERT(pte0 != NULL);
 
     // Tests address within same page maps to same pte.
-    pte0 = as_create_page(as, 0x00007000);
+    pte0 = create_test_page(as, 0x00007000);
+    lock_acquire(as->pages_lock);
     pte1 = as_touch_pte(as, 0x00007001);
+    lock_release(as->pages_lock);
     KASSERT(pte0 != NULL);
     KASSERT(pte0 == pte1);
 
-    pte0 = as_create_page(as, 0x0001f000);
+    pte0 = create_test_page(as, 0x00020000);
     KASSERT(pte0 != NULL);
-    pte0 = as_create_page(as, 0x00020000);
+    pte0 = create_test_page(as, 0x00021000);
     KASSERT(pte0 != NULL);
-    pte0 = as_create_page(as, 0x00021000);
+    pte0 = create_test_page(as, 0x003e0000);
     KASSERT(pte0 != NULL);
-    pte0 = as_create_page(as, 0x003e0000);
+    pte0 = create_test_page(as, 0x07c00000);
     KASSERT(pte0 != NULL);
-    pte0 = as_create_page(as, 0x07c00000);
-    KASSERT(pte0 != NULL);
-    pte0 = as_create_page(as, 0x7f000000);
+    pte0 = create_test_page(as, 0x7f000000);
     KASSERT(pte0 != NULL);
 
     // Tests level0 table has correct empty/non-empty entries.
@@ -238,10 +284,10 @@ addrspacetest8(int nargs, char **args)
     struct addrspace *as;
     struct pte *pte0;
 
-    kprintf("Starting as9 test...\n");
+    kprintf("Starting as8 test...\n");
     as = as_create();
     KASSERT(as != NULL);
-    pte0 = as_create_page(as, 0x00040000);
+    pte0 = create_test_page(as, 0x00040000);
     KASSERT(pte0 != NULL);
     as_destroy_page(as, 0x00040000);
     as_destroy(as);
@@ -250,11 +296,9 @@ addrspacetest8(int nargs, char **args)
 	return 0;
 }
 
-#define TEST_PAGES 1000
+#define TEST_PAGES 100
 #define CREATE_CYCLES 10
 
-// Tests as_copy correctly copies page table
-// entries and physical pages.
 static void
 create_and_free(struct addrspace *as)
 {
@@ -273,7 +317,7 @@ create_and_free(struct addrspace *as)
     stride = random() % 0x100;
     kprintf("create %d pages\n", n1_create_pages);
     for (i = 0; i < n1_create_pages; i++) {
-        pte = as_create_page(as, (offset + i * stride) * PAGE_SIZE);
+        pte = create_test_page(as, (offset + i * stride) * PAGE_SIZE);
         KASSERT(pte != NULL);
     }
 
@@ -288,8 +332,9 @@ create_and_free(struct addrspace *as)
     offset += n1_create_pages * stride + random() % 0x1000;
     stride = random() % 0x100;
     n2_create_pages = random() % TEST_PAGES;
+    kprintf("create %d pages\n", n2_create_pages);
     for (i = 0; i < n2_create_pages; i++) {
-        pte = as_create_page(as, (offset + i * stride) * PAGE_SIZE);
+        pte = create_test_page(as, (offset + i * stride) * PAGE_SIZE);
         KASSERT(pte != NULL);
     }
 }
@@ -302,7 +347,7 @@ addrspacetest9(int nargs, char **args)
     (void)args;
     struct addrspace *as;
 
-    kprintf("Starting as10 test...\n");
+    kprintf("Starting as9 test...\n");
 
     for (int i = 0; i < CREATE_CYCLES; i++) {
         kprintf("loop %d (0x%08x)\n", i, random());
@@ -327,15 +372,18 @@ addrspacetest10(int nargs, char **args)
     struct addrspace *as;
     struct pte *pte;
     int i;
+    int old_swap_enabled;
 
-    kprintf("Starting as11 test...\n");
+    kprintf("Starting as10 test...\n");
+
+    old_swap_enabled = set_swap_enabled(0);
 
     as = as_create();
     KASSERT(as != NULL);
 
     // Exhaust user memory.
     for (i = 0; i < MAX_PAGES; i++) {
-        pte = as_create_page(as, i * PAGE_SIZE);
+        pte = create_test_page(as, i * PAGE_SIZE);
         if (pte == NULL) {
             break;
         }
@@ -344,23 +392,28 @@ addrspacetest10(int nargs, char **args)
 
     // Free one page at front
     as_destroy_page(as, 0);
-    pte = as_create_page(as, MAX_PAGES * PAGE_SIZE);
+
+    lock_and_dump_coremap();
+    
+    pte = create_test_page(as, MAX_PAGES * PAGE_SIZE);
     KASSERT(pte != NULL);
 
     // Should fail since we are full again.
-    pte = as_create_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
+    pte = create_test_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
     KASSERT(pte == NULL);
 
     // Free one page at back.
     as_destroy_page(as, (i-1) * PAGE_SIZE);
-    pte = as_create_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
+    pte = create_test_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
     KASSERT(pte != NULL);
 
     // Should fail since we are full again.
-    pte = as_create_page(as, (MAX_PAGES + 2) * PAGE_SIZE);
+    pte = create_test_page(as, (MAX_PAGES + 2) * PAGE_SIZE);
     KASSERT(pte == NULL);
 
     as_destroy(as);
+
+    set_swap_enabled(old_swap_enabled);
 
 	success(TEST161_SUCCESS, SECRET, "as10");
 	return 0;
