@@ -34,19 +34,21 @@ struct pte
 	vaddr &= PAGE_FRAME;
 	// Must be a user space virtual address.
 	KASSERT(vaddr < MIPS_KSEG0);
-    paddr = alloc_pages(1, as, vaddr);
-    if (paddr == (paddr_t)NULL) {
-        return NULL;
-    }
+
 	lock_acquire(as->pages_lock);
     pte = as_touch_pte(as, vaddr);
     if (pte == NULL) {
-		free_pages(paddr);
 		lock_release(as->pages_lock);
         return NULL;
     }
 	// Page must not already exist.
 	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
+
+    paddr = alloc_pages(1, as, vaddr);
+    if (paddr == (paddr_t)NULL) {
+        lock_release(as->pages_lock);
+        return NULL;
+    }
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
 	lock_release(as->pages_lock);
@@ -313,15 +315,17 @@ create_and_free(struct addrspace *as)
     KASSERT(as != NULL);
 
     n1_create_pages = 1 + random() % TEST_PAGES;
-    offset = random() % 0x1000;
-    stride = random() % 0x100;
+    offset = random() % 0x100;
+    stride = 1 + random() % 0x100;
     kprintf("create %d pages\n", n1_create_pages);
     for (i = 0; i < n1_create_pages; i++) {
+        //kprintf("create %d@ 0x%08x\n", i, (offset + i * stride) * PAGE_SIZE);
         pte = create_test_page(as, (offset + i * stride) * PAGE_SIZE);
         KASSERT(pte != NULL);
     }
 
     n_free_pages = random() % n1_create_pages;
+    kprintf("free %d pages\n", n_free_pages);
     for (i = 0; i < n_free_pages; i++) {
         // May generate repeats which will attempt to destroy a page
         // more than once, but that should be silently ignored.
@@ -330,10 +334,11 @@ create_and_free(struct addrspace *as)
     }
 
     offset += n1_create_pages * stride + random() % 0x1000;
-    stride = random() % 0x100;
+    stride = 1 + random() % 0x100;
     n2_create_pages = random() % TEST_PAGES;
     kprintf("create %d pages\n", n2_create_pages);
     for (i = 0; i < n2_create_pages; i++) {
+        //kprintf("create %d@ 0x%08x\n", i, (offset + i * stride) * PAGE_SIZE);
         pte = create_test_page(as, (offset + i * stride) * PAGE_SIZE);
         KASSERT(pte != NULL);
     }
@@ -390,27 +395,13 @@ addrspacetest10(int nargs, char **args)
     }
     KASSERT(pte == NULL);
 
-    // Free one page at front
-    as_destroy_page(as, 0);
+    // Free 1 page for user.  Free 1 page for kernel page table entry.
+    as_destroy_page(as, 0x0000);
+    as_destroy_page(as, 0x1000);
 
-    lock_and_dump_coremap();
-    
+    // Should be able to get a free page now.
     pte = create_test_page(as, MAX_PAGES * PAGE_SIZE);
     KASSERT(pte != NULL);
-
-    // Should fail since we are full again.
-    pte = create_test_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
-    KASSERT(pte == NULL);
-
-    // Free one page at back.
-    as_destroy_page(as, (i-1) * PAGE_SIZE);
-    pte = create_test_page(as, (MAX_PAGES + 1) * PAGE_SIZE);
-    KASSERT(pte != NULL);
-
-    // Should fail since we are full again.
-    pte = create_test_page(as, (MAX_PAGES + 2) * PAGE_SIZE);
-    KASSERT(pte == NULL);
-
     as_destroy(as);
 
     set_swap_enabled(old_swap_enabled);

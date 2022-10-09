@@ -39,7 +39,7 @@
 #include <test/quint.h>
 
 // Number of parallel processes to spawn.
-#define NUM_PROCESS 2
+#define NUM_PROCESS 5
 
 static
 pid_t

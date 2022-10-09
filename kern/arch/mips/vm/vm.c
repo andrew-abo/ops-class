@@ -605,10 +605,6 @@ evict_page(unsigned *coremap_index)
 	int old_status;
 	int p;
 
-	// TODO(aabo): handle multi-page eviction
-	// What if kernel requests a multi-page allocation but there's no pages left?
-	// We need to evict multiple contiguous pages from the coremap.
-
 	// Identify a page to evict.
 	spinlock_acquire(&coremap_lock);
 	p = find_victim_page();
@@ -776,7 +772,6 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 
     spinlock_acquire(&coremap_lock);
 	p = get_ppages(npages);
-
 	if (p == 0) {
         spinlock_release(&coremap_lock);
         if (swap_enabled) {
@@ -791,7 +786,6 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 			return 0;
 		}
 	}
-
 	paddr = coremap_assign_pages(p, npages, as, vaddr);	
 	spinlock_release(&coremap_lock);
 	return paddr;
