@@ -5,6 +5,7 @@
 #include <addrspace.h>
 #include <proc.h>
 #include <synch.h>
+#include <vm.h>
 
 /*
  * Increments the heap break by amount bytes.

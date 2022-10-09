@@ -11,6 +11,7 @@
 #include <synch.h>
 #include <test.h>
 #include <kern/test161.h>
+#include <vm.h>
 
 
 /*

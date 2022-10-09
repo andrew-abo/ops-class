@@ -34,8 +34,6 @@
  * Address space structure and operations.
  */
 
-
-#include <vm.h>
 #include <types.h>
 #include "opt-dumbvm.h"
 

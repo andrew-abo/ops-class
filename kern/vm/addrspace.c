@@ -78,6 +78,35 @@ as_create(void)
 }
 
 /*
+ * Copies swapped out page src_pte to swapped out page dst_pte.
+ *
+ * Args:
+ *   dst_pte: Desintation page table entry.
+ *   src_pte: Source page table entry.
+ *   page_buf: Pointer to scratch buffer at least PAGE_SIZE bytes.
+ * 
+ * Returns:
+ *   0 on success, else errno.
+ */
+static int
+copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
+{
+
+	int result;
+
+    KASSERT(src_pte->status & VM_PTE_BACKED);
+	// Effect a copy to disk by loading dst with src contents,
+	// then swapping out dst.
+	dst_pte->paddr = KVADDR_TO_PADDR((vaddr_t)page_buf);
+	result = block_read(src_pte->block_index, dst_pte->paddr);
+	if (result) {
+		return result;
+	}
+	dst_pte->status = VM_PTE_VALID;
+    return maybe_swap_out(dst_pte, /*dirty=*/1);
+}
+
+/*
  * Copies src page table and all referenced physical pages to dst.
  *
  * New physical pages are allocated and independent copies of the
@@ -93,21 +122,23 @@ as_create(void)
  *   dst: Pointer to destination address space.
  *   src_pages: Pointer to source address space level0 page table.
  *   vpn: initial virtual page number (normally 0).
+ *   page_buf: Pointer to a scratch buffer at least PAGE_SIZE bytes.
  * 
  * Returns:
  *   0 on success, else errno.
  */
 static int
-copy_page_table(struct addrspace *dst, void **src_pages, int level, vaddr_t vpn) 
+copy_page_table(struct addrspace *dst, 
+                struct addrspace *src,
+				void **src_pages, 
+				int level, 
+				vaddr_t vpn, 
+				char *page_buf) 
 {
 	struct pte *dst_pte, *src_pte;
 	vaddr_t vaddr, next_vpn;
 	void **next_pages;
 	int result;
-
-	// TODO(aabo): re-write this using a single page buffer and
-	// copy swap-to-swap instead of populating entire source address space.
-	panic("copy_page_table: not implemented.");
 
 	// Recursive depth-first traversal of source page table.
 	int next_level = level + 1;
@@ -116,35 +147,48 @@ copy_page_table(struct addrspace *dst, void **src_pages, int level, vaddr_t vpn)
 		if (level == PT_LEVELS - 1) {
 			// Make copy of physical page.
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
-			// TODO(aabo): eliminate as_create_page which is only used here.
-			// Use statically allocated memory for page copy buffer?--requires locking.
-			// Stack memory will overflow since kernel stack is only 1 pages.
-			// kmalloc is maybe ok preferred since each process can have its own buffer
-			// without locking.
-			// But we use as_create_page to test addrspace functions.
-			//dst_pte = as_create_page(dst, vaddr);
+
+			dst_pte = as_touch_pte(dst, vaddr);
 			if (dst_pte == NULL) {
-				// TODO(aabo): Should handle evictions.
 				return ENOMEM;
 			}
-			// Accessing the source will either touch a valid page in memory,
-			// or cause it to swap in and make it valid.
-			// TODO(aabo):  Alternatively, we could use local kernel memory
-			// to copy from src swap to dst swap.  This would require the least
-			// amount of physical memory (one page buffer) instead of
-			// all the pages of src and dst.
 			src_pte = ((struct pte *)src_pages) + idx;
-			memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
-			        (const void *)vaddr, PAGE_SIZE);
+			KASSERT(src_pte != NULL);
+			if (src_pte->status & VM_PTE_VALID) {
+				// Copy memory to memory.
+				// We must release our page table before requesting memory.
+				// Otherwise eviction can deadlock if there is a mutual
+				// eviction from the victim address space.
+				lock_release(dst->pages_lock);
+				dst_pte->paddr = alloc_pages(1, dst, vaddr);
+				lock_acquire(dst->pages_lock);
+				if (dst_pte->paddr == 0) {
+					return ENOMEM;
+				}
+				// Accessing src pages may cause a vm fault, so we need to
+				// release the src page table so the vm system can access it.
+				// It's possible the src page will get swapped out in the meantime,
+				// but if so, the vm system will just swap it back in, which is
+				// slow but still correct.
+				lock_release(src->pages_lock);
+                memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
+                  (const void *)vaddr, PAGE_SIZE);
+				lock_acquire(src->pages_lock);
+			} else if (src_pte->status & VM_PTE_BACKED) {
+				// Copy swap to swap.
+				result = copy_swap_page(dst_pte, src_pte, page_buf);
+				if (result) {
+					return result;
+				}
+			} // else page does not have any data.
 			dst_pte->status = src_pte->status;
-			KASSERT(dst_pte->status | VM_PTE_VALID);
 			continue;
         }
 		next_pages = src_pages[idx];
         if (next_pages == NULL) {
 			continue;
 		}		
-		result = copy_page_table(dst, next_pages, next_level, next_vpn);
+		result = copy_page_table(dst, src, next_pages, next_level, next_vpn, page_buf);
 		if (result) {
 			return result;
 		}
@@ -156,6 +200,7 @@ int
 as_copy(struct addrspace *src, struct addrspace **ret)
 {
 	struct addrspace *dst;
+	char *page_buf;
 	int result;
 
 	// We assume src is the active address space so that we can reference
@@ -176,13 +221,27 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 		dst->segments[s].access = src->segments[s].access;
 	}
 	dst->next_segment = src->next_segment;
+
 	lock_acquire(src->heap_lock);
 	dst->vheapbase = src->vheapbase;
 	dst->vheaptop = src->vheaptop;
 	lock_release(src->heap_lock);
+
+	page_buf = kmalloc(sizeof(char) * PAGE_SIZE);
+	if (page_buf == NULL) {
+		as_destroy(dst);
+		return ENOMEM;
+	}
+
 	lock_acquire(src->pages_lock);
-	result = copy_page_table(dst, src->pages0, 0, (vaddr_t)0x0);
+	lock_acquire(dst->pages_lock);
+	// Scratch memory for copying swap pages if needed.
+	// Allocate once here per process for efficiency.
+	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0, page_buf);
+	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
+
+	kfree(page_buf);
 	if (result) {
 		as_destroy(dst);
 		return result;

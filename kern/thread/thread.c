@@ -50,6 +50,7 @@
 #include <addrspace.h>
 #include <mainbus.h>
 #include <vnode.h>
+#include <vm.h>
 
 
 /* Magic number used as a guard value on kernel thread stacks. */

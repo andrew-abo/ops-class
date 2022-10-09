@@ -532,5 +532,4 @@ int sys_getpid(pid_t *pid)
 void
 sys___getlogin()
 {
-    lock_and_dump_coremap();
 }

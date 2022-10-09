@@ -557,7 +557,7 @@ find_victim_page()
  * Returns:
  *   0 on success else errno.
  */
-static int
+int
 maybe_swap_out(struct pte *pte, int dirty) {
 	unsigned block_index;
 	int result;
@@ -1132,7 +1132,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	read_request = faulttype == VM_FAULT_READ;
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
-		panic("vm_fault: operation not valid");
 		return EFAULT;
 	}
 	faultaddress &= PAGE_FRAME;
