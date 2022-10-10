@@ -7,6 +7,7 @@
 #include <lib.h>
 #include <test.h>
 #include <kern/test161.h>
+#include <synch.h>
 #include <vm.h>
 
 // CAUTION: if local array exceeds PAGE_SIZE bytes the kernel stack
@@ -259,43 +260,38 @@ vmtest6(int nargs, char **args)
 	int result;
 	unsigned i;
 	struct pte *pte;
-	unsigned block_index = 7;
 	vaddr_t faultaddress = 0x10000;
 	struct addrspace *as;
 	(void)nargs;
 	(void)args;
 
-	// Create a test page on disk.
-	vaddr = alloc_kpages(1);
-	KASSERT(vaddr != 0);
-	paddr = KVADDR_TO_PADDR(vaddr);
-	// Fill page with known sequence of bytes.
-	for (i = 0; i < PAGE_SIZE; i++) {
-		*(unsigned char *)(vaddr + i) = i % 256;
-	}
-	result = block_write(block_index, paddr);
-	// Zero out the memory in case we get assigned the same page.
-	bzero((void *)vaddr, PAGE_SIZE);
-	KASSERT(result == 0);
-	free_kpages(vaddr);
-
-	// Create a page table with pte backed by test page.
 	as = as_create();
     KASSERT(as != NULL);
     as_define_region(as, faultaddress, 0x2000, 1, 1, 0);
     pte = create_test_page(as, faultaddress);
     KASSERT(pte != NULL);
-	pte->status &= ~VM_PTE_VALID;
-    free_pages(pte->paddr);
-	pte->block_index = block_index;
-	pte->status |= VM_PTE_BACKED;
+
+	paddr = pte->paddr;
+	vaddr = PADDR_TO_KVADDR(paddr);
+	// Fill page with known sequence of bytes.
+	for (i = 0; i < PAGE_SIZE; i++) {
+		*(unsigned char *)(vaddr + i) = i % 256;
+	}
+
+	// Swap page out.
+	result = maybe_swap_out(pte, /*dirty=*/1);
+	KASSERT(result == 0);
+	free_pages(paddr);
+	
+	// Zero out the old memory for good meeasure.
+	bzero((void *)vaddr, PAGE_SIZE);
 
 	// Access the backed page via page table.
 	result = get_page_via_table(as, faultaddress);
 	KASSERT(result == 0);
+	vaddr = PADDR_TO_KVADDR(pte->paddr);
 
 	// Confirm known sequence read back.
-	vaddr = PADDR_TO_KVADDR(pte->paddr);
 	for (i = 0; i < PAGE_SIZE; i++) {
 		KASSERT(*(unsigned char *)(vaddr + i) == (i % 256));
 	}
@@ -399,10 +395,14 @@ vmtest9(int nargs, char **args)
 	int result;
 	unsigned core_idx;
 	vaddr_t *core_idx_to_vaddr;
+	int old_swap_enabled;
 
 	// Disable swapping while we exhaust memory.
-	set_swap_enabled(0);
+	old_swap_enabled = set_swap_enabled(0);
+	KASSERT(old_swap_enabled);
 
+	// Allocate large array dynamically so we don't overflow
+	// the small kernel stack.
 	core_idx_to_vaddr = kmalloc(sizeof(vaddr_t) * TEST_PAGES);
 	KASSERT(core_idx_to_vaddr != NULL);
 
@@ -422,6 +422,7 @@ vmtest9(int nargs, char **args)
 		core_idx = paddr_to_core_idx(pte->paddr);
 		core_idx_to_vaddr[core_idx] = vaddr;
 	}
+	KASSERT(pte == NULL);
 
 	// Re-enable swapping.
 	set_swap_enabled(1);
@@ -437,7 +438,9 @@ vmtest9(int nargs, char **args)
 
 	// Page-in from swapdisk.
 	vaddr = core_idx_to_vaddr[core_idx];
+	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, vaddr);
+	lock_release(as->pages_lock);
 	KASSERT(pte != NULL);
 	block_read(pte->block_index, paddr);
 	// Check unique test pattern has been restored.
@@ -481,8 +484,6 @@ vmtest10(int nargs, char **args)
 		vaddr = 0x1000 * p;
         pte = create_test_page(as, vaddr);
 		KASSERT(pte != NULL);
-		// Write a unique test pattern to each page.
-		*(unsigned *)PADDR_TO_KVADDR(pte->paddr) = p;
 	}
 
 	// Clean up.

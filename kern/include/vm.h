@@ -64,7 +64,7 @@ void vm_init_coremap(void);
 
 // Test and debug support.
 void lock_and_dump_coremap(void);
-
+int as_in_coremap(struct addrspace *as);
 // Initialize swap system.
 void vm_bootstrap(void);
 

@@ -44,12 +44,13 @@ struct pte
     }
 	// Page must not already exist.
 	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
-
+	
+    lock_release(as->pages_lock);
     paddr = alloc_pages(1, as, vaddr);
     if (paddr == (paddr_t)NULL) {
-        lock_release(as->pages_lock);
         return NULL;
     }
+    lock_acquire(as->pages_lock);
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
 	lock_release(as->pages_lock);

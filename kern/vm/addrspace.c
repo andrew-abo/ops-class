@@ -241,6 +241,8 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
 
+	KASSERT(as_validate_page_table(dst) == 0);
+
 	kfree(page_buf);
 	if (result) {
 		as_destroy(dst);
@@ -388,6 +390,7 @@ as_destroy(struct addrspace *as)
 	destroy_page_table(as->pages0, 0);
 	lock_destroy(as->pages_lock);
 	lock_destroy(as->heap_lock);
+	KASSERT(!as_in_coremap(as));
 	kfree(as);
 }
 

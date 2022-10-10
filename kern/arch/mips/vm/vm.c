@@ -154,9 +154,33 @@ dump_coremap()
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
-		kprintf("coremap[%3u]: status=0x%08x, paddr=0x%08x, vaddr=0x%08x, npages=%u\n", 
-		  p, status, core_idx_to_paddr(p), coremap[p].vaddr, npages);
+		kprintf("coremap[%3u]: status=0x%08x, paddr=0x%08x, as=0x%08x, vaddr=0x%08x, npages=%u\n", 
+		  p, status, core_idx_to_paddr(p), (vaddr_t)coremap[p].as, coremap[p].vaddr, npages);
 	}
+}
+
+/* 
+ * Returns 1 if pages are found in coremap belonging to addrspace as,
+ * else 0.
+ *
+ * This is a debugging tool only.
+ */
+int
+as_in_coremap(struct addrspace *as)
+{
+	unsigned p;
+	int found_as = 0;
+
+	spinlock_acquire(&coremap_lock);
+	for (p = 0; p < page_max;) {
+		if (coremap[p].as == as) {
+            found_as = 1;
+			break;
+		}
+		p += get_core_npages(p);
+	}
+	spinlock_release(&coremap_lock);
+	return found_as;
 }
 
 /*
@@ -535,7 +559,7 @@ find_victim_page()
 	victim = random() % user_pages;
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
-		if (coremap[p].vaddr >= MIPS_KSEG0) {
+		if (coremap[p].as == NULL) {
 			// Skip kernel pages.
 			continue;
 		}
@@ -548,7 +572,7 @@ find_victim_page()
 }
 
 /*
- * Swap out a page if needed.
+ * Swap out a page if needed.  Mark as invalid.
  *
  * Args:
  *   pte: Pointer to page table entry of page to maybe swap out.
@@ -706,7 +730,6 @@ coremap_assign_pages(unsigned p, unsigned npages, struct addrspace *as, vaddr_t 
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	vaddr_direct = PADDR_TO_KVADDR(paddr);
 	bzero((void *)vaddr_direct, npages * PAGE_SIZE);
-	used_bytes += npages * PAGE_SIZE;
 	coremap[p].status =	set_core_status(/*used=*/1, 0, 0, npages);
 	coremap[p].as = as;
 	if (as == NULL) {
@@ -773,6 +796,7 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
     spinlock_acquire(&coremap_lock);
 	p = get_ppages(npages);
 	if (p == 0) {
+		// No free pages in coremap.
         spinlock_release(&coremap_lock);
         if (swap_enabled) {
             result = evict_page(&p);
@@ -785,6 +809,9 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
 			// Could not allocate a page.
 			return 0;
 		}
+	} else {
+		// Not an eviction, so more memory consumed.
+        used_bytes += npages * PAGE_SIZE;
 	}
 	paddr = coremap_assign_pages(p, npages, as, vaddr);	
 	spinlock_release(&coremap_lock);
