@@ -110,6 +110,7 @@ proc_create(const char *name)
 	proc->waitpid_lock = NULL;
 	proc->waitpid_cv = NULL;
 	proc->p_addrspace = NULL;
+	proc->files_lock = NULL;
 	proc->next = NULL;
 	for (int fd = 0; fd < FILES_PER_PROCESS_MAX; fd++) {
 		proc->files[fd] = NULL;

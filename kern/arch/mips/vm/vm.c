@@ -116,6 +116,7 @@ swap_used_pages()
 	size_t p;
 	size_t used = 0;
 
+	KASSERT(swap_enabled);
 	lock_acquire(swapmap_lock);
 	for (p = 0; p < swapdisk_pages; p++) {
         if (bitmap_isset(swapmap, p)) {

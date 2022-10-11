@@ -82,16 +82,13 @@ main(void)
 		fork();
 		// Only parent gets to print
 		if(getpid() == parent_pid) {
-			//TEST161_LPROGRESS(0);
+			TEST161_LPROGRESS(0);
 			if (iters > 0 && iters % 20 == 0) {
 				putchar('\n');
 			}
 			iters++;
 
 			__time(&time_now_s, &time_now_ns);
-			if (!did_print) {
-                printf("Time elapsed = %lld\n", time_now_s - start_time_s);
-			}
 			if (time_now_s - start_time_s > TEST_DURATION && !did_print) {
 				did_print = 1;
 				// We need to print this using secprintf so that it uses

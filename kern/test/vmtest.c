@@ -378,8 +378,6 @@ vmtest8(int nargs, char **args)
 	return 0;
 }
 
-#define TEST_PAGES 1024
-
 // Tests a victim page is properly evicted.
 int
 vmtest9(int nargs, char **args)
@@ -396,6 +394,9 @@ vmtest9(int nargs, char **args)
 	unsigned core_idx;
 	vaddr_t *core_idx_to_vaddr;
 	int old_swap_enabled;
+	// Choose a number large enough to exhaust memory when
+	// swap is disabled.
+	unsigned test_pages = 4096;
 
 	// Disable swapping while we exhaust memory.
 	old_swap_enabled = set_swap_enabled(0);
@@ -403,7 +404,7 @@ vmtest9(int nargs, char **args)
 
 	// Allocate large array dynamically so we don't overflow
 	// the small kernel stack.
-	core_idx_to_vaddr = kmalloc(sizeof(vaddr_t) * TEST_PAGES);
+	core_idx_to_vaddr = kmalloc(sizeof(vaddr_t) * test_pages);
 	KASSERT(core_idx_to_vaddr != NULL);
 
 	// Create a test address space with some user pages.
@@ -411,7 +412,7 @@ vmtest9(int nargs, char **args)
     KASSERT(as != NULL);
 
     // Exhaust memory.
-    for (p = 0; p < TEST_PAGES; p++) {
+    for (p = 0; p < test_pages; p++) {
 		vaddr = 0x1000 * p;
         pte = create_test_page(as, vaddr);
 		if (pte == NULL) {
@@ -470,7 +471,8 @@ vmtest10(int nargs, char **args)
 	(void)args;
 	size_t swap0, swap1;
 	size_t mem0, mem1;
-	unsigned test_pages = 1000;
+	// Choose a number that is large enough to cause some page evictions.
+	unsigned test_pages = 4096;
 
 	mem0 = coremap_used_bytes();
 	swap0 = swap_used_pages();
