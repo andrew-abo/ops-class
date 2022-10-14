@@ -97,7 +97,6 @@ paddr_t core_idx_to_paddr(unsigned p);
 
 struct addrspace *vm_get_as(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);
-int kernel_stack_ok(void);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

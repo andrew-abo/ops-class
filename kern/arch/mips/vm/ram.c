@@ -97,6 +97,9 @@ ram_stealmem(unsigned long npages)
 	size_t size;
 	paddr_t paddr;
 
+	// Fails if ram_getfirstfree() has been called.
+	KASSERT(lastpaddr != 0);
+
 	size = npages * PAGE_SIZE;
 
 	if (firstpaddr + size > lastpaddr) {

@@ -151,11 +151,18 @@ boot(void)
 		GROUP_VERSION, buildconfig, buildversion);
 	kprintf("\n");
 
-	/* Early initialization. */
+	/* Early boot. */
+	// Coremap is not available yet. kmalloc'd memory is forever,
+	// so use sparingly.
 	ram_bootstrap();
-	vm_init_coremap();
 	proc_bootstrap();
 	thread_bootstrap();
+	
+	// Coremap requires sleep locks, which require threads.
+	// kmalloc can be kfree'd after coremap is initialized.
+	vm_init_coremap();
+
+	/* Post virtual memory available */
 	hardclock_bootstrap();
 	vfs_bootstrap();
 	kheap_nextgeneration();

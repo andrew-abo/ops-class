@@ -45,16 +45,15 @@
 #include <vfs.h>
 #include <vm.h>
 
-// Dummy value to help detect kernel stack overflow.
-#define STACK_CANARY 0xbaddcafe
+// At boot coremap is disabled until it has been initialized.
+static int coremap_enabled = 0;
 
-static struct spinlock coremap_lock;
+static struct lock *coremap_lock;
 
 // Acquire coremap_lock before accessing any of these shared variables.
 static paddr_t firstpaddr;  // First byte that can be allocated.
 static paddr_t lastpaddr;   // Last byte that can be allocated.
 static struct core_page *coremap;
-static uint32_t *kernel_stack_bottom;  // Pointer to bottom of kernel stack.
 static unsigned used_bytes;
 static unsigned page_max;  // Total number of allocatable pages.
 static unsigned next_fit;  // Coremap index to resume free page search.
@@ -68,6 +67,10 @@ static struct lock *swapdisk_lock;
 static size_t swapdisk_pages;
 static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
 
+/*
+ * Wrap ram_stealmem in a spinlock.
+ */
+static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
 /*
  * Enable/disable swap.
@@ -151,7 +154,7 @@ dump_coremap()
 	unsigned npages;
 	unsigned status;
 	
-	KASSERT(spinlock_do_i_hold(&coremap_lock));
+	KASSERT(lock_do_i_hold(coremap_lock));
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
@@ -172,7 +175,7 @@ as_in_coremap(struct addrspace *as)
 	unsigned p;
 	int found_as = 0;
 
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 	for (p = 0; p < page_max;) {
 		if (coremap[p].as == as) {
             found_as = 1;
@@ -180,25 +183,15 @@ as_in_coremap(struct addrspace *as)
 		}
 		p += get_core_npages(p);
 	}
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 	return found_as;
-}
-
-/*
- * Returns 1 if kernel stack canary is still intact (appears not corrupted),
- * else 0.
- */
-int
-kernel_stack_ok()
-{
-    return *kernel_stack_bottom == STACK_CANARY ? 1 : 0;
 }
 
 void lock_and_dump_coremap()
 {
-    spinlock_acquire(&coremap_lock);
+    lock_acquire(coremap_lock);
 	dump_coremap();
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 }
 
 /*
@@ -229,9 +222,9 @@ struct addrspace
 	struct addrspace *as;
 
 	p = paddr_to_core_idx(paddr);
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 	as = coremap[p].as;
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 	return as;
 }
 
@@ -245,9 +238,9 @@ vm_get_vaddr(paddr_t paddr)
     vaddr_t vaddr;
 
 	p = paddr_to_core_idx(paddr);
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 	vaddr = coremap[p].vaddr;
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 	return vaddr;
 }
 
@@ -290,8 +283,7 @@ vm_tlb_erase()
 
 /*
  * Debug check to confirm coremap is valid.
- * Caller is responsible for locking coremap.
- * 
+ *
  * Returns:
  *   0 if coremap is valid, else panics.
  */
@@ -304,9 +296,9 @@ validate_coremap()
 	unsigned npages;
     unsigned status;
 
-    KASSERT(spinlock_do_i_hold(&coremap_lock));
+	lock_acquire(coremap_lock);
     KASSERT(next_fit < page_max);
-	for (p = 0; p < page_max;) {
+	for (p = 0; p < page_max; p += npages) {
 		if (p > 0) {
 			KASSERT(coremap[p].prev == p - npages);
 		}
@@ -321,11 +313,12 @@ validate_coremap()
             } else {
 				// User page.
                 KASSERT(coremap[p].vaddr < MIPS_KSEG0);
+				// We only support allocating user pages one at a time.
+				KASSERT(npages == 1);
             }
 		} else {
 			free_pages += npages;
 		}
-		p += npages;
 	}
 	if (used_pages * PAGE_SIZE != used_bytes) {
 		kprintf("used_pages = %u\n", used_pages);
@@ -342,15 +335,15 @@ validate_coremap()
 		panic("(used_pages + free_pages) (%u) != page_max (%u)",
 		  used_pages + free_pages, page_max);
 	}
-	KASSERT(*kernel_stack_bottom == STACK_CANARY);
+	lock_release(coremap_lock);
+
 	return 0;
 }
 
 /*
  * Initializes the physical to virtual memory map.
  *
- * Must be run after ram_bootstrap() and before kmalloc().
- * will function.
+ * Must be run after ram_bootstrap().
  */
 void
 vm_init_coremap()
@@ -361,17 +354,26 @@ vm_init_coremap()
 	paddr_t coremap_paddr;
 	unsigned p;
 
+	// Requires a primitive version of alloc_kpages() to be
+	// available to support kmalloc until we can switch over
+	// to recyclable coremap memory.
+	coremap_lock = lock_create("coremap");
+	if (coremap_lock == NULL) {
+		panic("vm_init_coremap: Cannot create coremap_lock.");
+	}
+
 	lastpaddr = ram_getsize();
+	// RAM initialization can only occur once and locks in any
+	// memory allocated with ram_stealmem().  We cannot make
+	// further calls to ram_stealmem().
 	kernel_top = ram_getfirstfree();
+	KASSERT((kernel_top & PAGE_FRAME) == kernel_top);
 
 	// Total memory in bytes minus the kernel code.
 	total_bytes = lastpaddr;
 	page_max = paddr_to_core_idx(total_bytes);
 	coremap_bytes = page_max * sizeof(struct core_page);
-
-	// &coremap[0] aligned up to core_page size.	
-	coremap_paddr = (kernel_top + sizeof(struct core_page) - 1) & 
-	    ~(sizeof(struct core_page) - 1);
+	coremap_paddr = kernel_top;
 
 	// First allocatable page is above coremap and page aligned up.
 	firstpaddr = coremap_paddr + coremap_bytes;
@@ -380,9 +382,6 @@ vm_init_coremap()
 	// From this point, we will be accessing coremap directly, so
 	// convert to a direct mapped virtual address and zero out.
 	coremap = (struct core_page *)PADDR_TO_KVADDR(coremap_paddr);
-	// Place canary value to help detect kernel stack overflow.
-	kernel_stack_bottom = (uint32_t *)((char *)coremap - PAGE_SIZE);
-	*kernel_stack_bottom = STACK_CANARY;
 	bzero((void *)coremap, coremap_bytes);	
 	// Mark kernel and coremap pages as allocated in coremap.
 	p = paddr_to_core_idx(firstpaddr);
@@ -397,7 +396,8 @@ vm_init_coremap()
 	next_fit = p;
 	// Includes kernel and coremap in used_bytes.
 	used_bytes = p * PAGE_SIZE;
-	spinlock_init(&coremap_lock);
+
+	coremap_enabled = 1;
 	KASSERT(validate_coremap() == 0);
 
 	kprintf("\nvm_init_coremap\n");
@@ -405,7 +405,6 @@ vm_init_coremap()
 	kprintf("firstpaddr = 0x%08x\n", firstpaddr);
 	kprintf("coremap    = 0x%08x\n", coremap_paddr);
 	kprintf("page_max   = %u\n", page_max);
-	kprintf("*kernel_stack_bottom = 0x%08x\n", *(uint32_t *)kernel_stack_bottom);
 	kprintf("\n");
 }
 
@@ -424,9 +423,11 @@ vm_bootstrap(void)
 	strcpy(vfs_path, SWAP_PATH);
 	result = vfs_open(vfs_path, O_RDWR, unused_mode, &swapdisk_vn);
 	if (result) {
+		kprintf("Swap DISABLED.\n");
         swap_enabled = 0;
         return;
 	}
+	kprintf("Swap ENABLED.\n");
 	swap_enabled = 1;
 	result = VOP_STAT(swapdisk_vn, &statbuf);
 	swapdisk_pages = (int)(statbuf.st_size / PAGE_SIZE);
@@ -535,7 +536,7 @@ find_victim_page()
 	unsigned victim;
 	unsigned user_pages = 0;
 	
-	KASSERT(spinlock_do_i_hold(&coremap_lock));
+	KASSERT(lock_do_i_hold(coremap_lock));
 
 	// TODO(aabo): Replace simple policy with higher performance policy
 	// such as CLOCK.
@@ -575,9 +576,11 @@ find_victim_page()
 /*
  * Swap out a page if needed.  Mark as invalid.
  *
+ * Caller responsible for locking page table.
+ * 
  * Args:
  *   pte: Pointer to page table entry of page to maybe swap out.
- *   dirty: 1 if page has been modified, else 0.
+ *   dirty: non-zero if page has been modified, else 0.
  * 
  * Returns:
  *   0 on success else errno.
@@ -631,10 +634,10 @@ evict_page(unsigned *coremap_index)
 	int p;
 
 	// Identify a page to evict.
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 	p = find_victim_page();
 	if (p == 0) {
-		spinlock_release(&coremap_lock);
+		lock_release(coremap_lock);
 		return ENOMEM;
 	}
 	// We assume we are evicting exactly one page.
@@ -642,19 +645,43 @@ evict_page(unsigned *coremap_index)
 	old_vaddr = coremap[p].vaddr;
 	old_as = coremap[p].as;
 	old_status = coremap[p].status;
+
+	// TODO(aabo): lock the victim page table before making any modifications
+	// so we know we can complete the eviction atomically.
+	// Don't want to have situation where page table is pointing
+	// to an invalid coremap page.
+
+	// Pre-conditions:
+	// No outside evications can occur if:
+	// 1) I hold the coremap lock (no evictions anywhere).
+	// OR
+	// 2) I hold a page table lock (no evictions from that page table).
+	// 
+	// Thus, if I hold either of those, then I cannot invoke any
+	// operation that may cause an eviction else I can deadlock.
+
 	// Claim this page for the kernel so on one else evicts it.
 	coremap[p].as = NULL;
 	coremap[p].vaddr = (vaddr_t)NULL;
 	coremap[p].status &= ~(VM_CORE_DIRTY | VM_CORE_ACCESSED);
 	coremap[p].status |= VM_CORE_USED;
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 
 	KASSERT(old_as != NULL);
 
 	if (old_status & VM_CORE_USED) {
+		// Must not hold a lock to my page table when requesting
+		// a lock on another process' (or my own) page table.
+		// Otherwise a mutual eviction will cause a deadlock.
+		// TODO(aabo): Need to comment this out for test vm9
+		// which runs in kernel mode so as == NULL.
+		//struct addrspace *my_as;
+		//my_as = proc_getas();
+		//KASSERT(!lock_do_i_hold(my_as->pages_lock));
         lock_acquire(old_as->pages_lock);
         // Deactivate page so it is not accessed during page out.
         // TODO(aabo): call tlb_shootdown for multi-CPU case.
+		//ipi_broadcast_tlbshootdown(mapping);
         vm_tlb_remove(old_vaddr);
         old_pte = as_lookup_pte(old_as, old_vaddr);
         maybe_swap_out(old_pte, old_status & VM_CORE_DIRTY);
@@ -681,7 +708,7 @@ get_ppages(unsigned npages)
     unsigned p;  // Page index into coremap.
 	unsigned block_pages;
 
-    KASSERT(spinlock_do_i_hold(&coremap_lock));
+    KASSERT(lock_do_i_hold(coremap_lock));
 	KASSERT(npages > 0);
 
 	p = next_fit;
@@ -721,7 +748,7 @@ coremap_assign_pages(unsigned p, unsigned npages, struct addrspace *as, vaddr_t 
 	unsigned prev;
 	unsigned next;
 
-    KASSERT(spinlock_do_i_hold(&coremap_lock));
+    KASSERT(lock_do_i_hold(coremap_lock));
 	KASSERT((as == NULL) || ((as != NULL) && (vaddr < MIPS_KSEG0)));
 
 	block_pages = get_core_npages(p);
@@ -794,47 +821,41 @@ alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr)
     unsigned p;  // Page index into coremap.
 	int result;
 
-    spinlock_acquire(&coremap_lock);
+    lock_acquire(coremap_lock);
 	p = get_ppages(npages);
 	if (p == 0) {
 		// No free pages in coremap.
-        spinlock_release(&coremap_lock);
-        if (swap_enabled) {
-            result = evict_page(&p);
-            if (result != 0) {
-                // Could not allocate a page.
-                return 0;
-            }
-            spinlock_acquire(&coremap_lock);
-		} else {
-			// Could not allocate a page.
+        lock_release(coremap_lock);
+		if (!swap_enabled) {
+            // Could not allocate a page.
 			return 0;
 		}
+		result = evict_page(&p);
+		//kprintf("evicted coremap[%u]\n", p);
+		if (result != 0) {
+            // Could not allocate a page.
+            return 0;
+        }
+        lock_acquire(coremap_lock);
 	} else {
 		// Not an eviction, so more memory consumed.
         used_bytes += npages * PAGE_SIZE;
 	}
-	paddr = coremap_assign_pages(p, npages, as, vaddr);	
-	spinlock_release(&coremap_lock);
+	paddr = coremap_assign_pages(p, npages, as, vaddr);
+	lock_release(coremap_lock);
+
+	// TODO(aabo)
+	// newly allocated page is vulnerable to eviction at this point since
+	// as is a user addrspace.  If I update the caller pte with this
+	// page, it may already be invalid, putting the VM in a inconsistent state.
+	// coremap_assign_pages and updating pte must be atomic.
+
 	return paddr;
 }
 
-/* 
- * Allocate npages of memory from kernel virtual address space.
- *
- * Uses coremap as implicit free list and allocates using a next fit
- * policy.  Fit search is resumed from next_fit index each call and
- * rolls over at page_max.
- *
- * Args:
- *   npages: Number of contiguous pages to allocate.
- * 
- * Returns:
- *   Virtual address from kernel segment of first page, else NULL
- *   if unsuccessful.
- */
-vaddr_t
-alloc_kpages(unsigned npages)
+
+static vaddr_t
+alloc_kpages_post_boot(unsigned npages)
 {
 	paddr_t paddr;
 
@@ -846,23 +867,65 @@ alloc_kpages(unsigned npages)
 }
 
 /*
- * Fill a block with 0xcafebadd.
- *
- * Assists with dangling pointer detection (aka poisoning).
+ * Irreversibly allocate some pages.
+ * 
+ * Helper function for alloc_kpages_bootstrap.
  */
-/*
-static
-void
-fill_deadbeef(void *vptr, size_t len)
+static paddr_t
+getppages_pre_boot(unsigned long npages)
 {
-	uint32_t *ptr = vptr;
-	size_t i;
+	paddr_t addr;
 
-	for (i=0; i<len/sizeof(uint32_t); i++) {
-		ptr[i] = 0xdeadbeef;
-	}
+	spinlock_acquire(&stealmem_lock);
+	addr = ram_stealmem(npages);
+	spinlock_release(&stealmem_lock);
+	return addr;
 }
-*/
+
+/* 
+ * Allocate/free some kernel-space virtual pages during boot.
+ *
+ * For any dynamic memory that is allocated at runtime before
+ * the virtual memory system is up, this function can
+ * be used to allocate pages.  It will never return memory
+ * to the system so use sparingly.
+ */
+static vaddr_t
+alloc_kpages_pre_boot(unsigned npages)
+{
+	paddr_t pa;
+
+	pa = getppages_pre_boot(npages);
+	if (pa==0) {
+		return 0;
+	}
+	return PADDR_TO_KVADDR(pa);
+}
+
+/* 
+ * Allocate npages of memory from kernel virtual address space.
+ *
+ * Wrapper which calls alloc_kpages_func.  This indirection
+ * allows us to have a different allocator at boot before
+ * the virtual memory system is up for setting up runtime
+ * objects.
+ * 
+ * Args:
+ *   npages: Number of contiguous pages to allocate.
+ * 
+ * Returns:
+ *   Virtual address from kernel segment of first page, else NULL
+ *   if unsuccessful.
+ */
+
+vaddr_t
+alloc_kpages(unsigned npages)
+{
+	if (coremap_enabled) {
+		return alloc_kpages_post_boot(npages);
+	}
+	return alloc_kpages_pre_boot(npages);
+}
 
 /*
  * Frees a block of kernel pages starting at vaddr.
@@ -872,9 +935,11 @@ free_kpages(vaddr_t vaddr)
 {
 	paddr_t paddr;
 
-    KASSERT((vaddr & PAGE_FRAME) == vaddr);
-	paddr = KVADDR_TO_PADDR(vaddr);
-	free_pages(paddr);
+	if (coremap_enabled) {
+        KASSERT((vaddr & PAGE_FRAME) == vaddr);
+        paddr = KVADDR_TO_PADDR(vaddr);
+        free_pages(paddr);
+	}
 }
 
 /*
@@ -892,7 +957,7 @@ free_pages(paddr_t paddr)
 	KASSERT((paddr >= firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
 
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 
 	// Free this block.
 	KASSERT(coremap[p].status & VM_CORE_USED);
@@ -902,6 +967,11 @@ free_pages(paddr_t paddr)
         vm_tlb_remove(vaddr);
 		vaddr += PAGE_SIZE;
 	}
+
+	// TODO(aabo): if pte is not yet updated, a TLB fault could occur
+	// re-instating the page in the TLB.  We should remote the page from
+	// the pte first.
+
 	coremap[p].status &= ~VM_CORE_USED;
 	coremap[p].vaddr = (vaddr_t)NULL;
 	coremap[p].as = NULL;
@@ -942,24 +1012,28 @@ free_pages(paddr_t paddr)
 		}
 	}
 
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 }
 
-unsigned
-int
+unsigned int
 coremap_used_bytes() {
 	unsigned result;
 
-	spinlock_acquire(&coremap_lock);
-	result = used_bytes;
-	spinlock_release(&coremap_lock);
-	return result;
+	if (coremap_enabled) {
+        lock_acquire(coremap_lock);
+        result = used_bytes;
+        lock_release(coremap_lock);
+        return result;
+	}
+	return 0;
 }
 
 void
 vm_tlbshootdown(const struct tlbshootdown *ts)
 {
 	(void)ts;
+	// TODO(aabo): Implement what each CPU should do when
+	// it recieves an ipi for shootdown.
 	panic("vm_tlbshootdown not implemented.\n");
 }
 
@@ -981,12 +1055,12 @@ flag_page_as_dirty(vaddr_t vaddr)
 	// Only user space pages should be in the TLB.
 	KASSERT(vaddr < MIPS_KSEG0);
 
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 	spl = splhigh();
 	tlb_idx = tlb_probe(vaddr & PAGE_FRAME, 0);
 	if (tlb_idx < 0) {
         splx(spl);
-        spinlock_release(&coremap_lock);
+        lock_release(coremap_lock);
         return 1;
     }
     tlb_read(&entryhi, &entrylo, tlb_idx);
@@ -996,7 +1070,7 @@ flag_page_as_dirty(vaddr_t vaddr)
     p = paddr_to_core_idx(paddr);
     coremap[p].status |= VM_CORE_DIRTY;
     splx(spl);
-    spinlock_release(&coremap_lock);
+    lock_release(coremap_lock);
 
     return 0;
 }
@@ -1030,22 +1104,29 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 	splx(spl);
 }
 
+/*
+ * Lock coremap and find victim page.
+ *
+ * Do not use.  For testing only.
+ */
 paddr_t
 locking_find_victim_page()
 {
 	paddr_t paddr;
-	spinlock_acquire(&coremap_lock);
+	lock_acquire(coremap_lock);
 	paddr = find_victim_page();
-	spinlock_release(&coremap_lock);
+	lock_release(coremap_lock);
 	return paddr;
 }
 
 /*
  * Retrieve page containing faultaddress.
  *
- * Allocate a new page in memory.
+ * Search page table for faultaddress.
+ * If we find it, just update the TLB and return.
+ * If not found, allocate a new page in memory.
  * If page is paged out, then page in from swapdisk.
- * Update page table.
+ * Update page table and TLB.
  * 
  * Args:
  *   as: Pointer to address space.
@@ -1072,6 +1153,15 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 		// eviction from the victim address space.
 		lock_release(as->pages_lock);
         pte->paddr = alloc_pages(1, as, faultaddress);
+		if (pte->paddr == 0) {
+			return ENOMEM;
+		}
+		
+		// TODO(aabo): we are vulnerable to newly allocated page being 
+		// evicted in this window, which would lead to an inconsistent.
+		// VM state.
+		// coremap and page table updates must be an atomic unit.
+
         lock_acquire(as->pages_lock);
 		if (pte->status & VM_PTE_BACKED) {
             KASSERT(swap_enabled);
@@ -1080,11 +1170,15 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
                 return EIO;
             }
         }		
+        pte->status |= VM_PTE_VALID;
+        KASSERT(validate_coremap() == 0);
+        KASSERT(as_validate_page_table(as) == 0);
     }
 	KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
 	pte->status |= VM_PTE_VALID;
 	vm_tlb_insert(pte->paddr, faultaddress);
 	lock_release(as->pages_lock);
+
 	return 0;
 }
 

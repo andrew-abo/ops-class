@@ -80,6 +80,8 @@ as_create(void)
 /*
  * Copies swapped out page src_pte to swapped out page dst_pte.
  *
+ * Caller is responsible for locking src and dst addrspaces.
+ * 
  * Args:
  *   dst_pte: Desintation page table entry.
  *   src_pte: Source page table entry.
@@ -140,6 +142,9 @@ copy_page_table(struct addrspace *dst,
 	void **next_pages;
 	int result;
 
+	KASSERT(lock_do_i_hold(src->pages_lock));
+	KASSERT(lock_do_i_hold(dst->pages_lock));
+	
 	// Recursive depth-first traversal of source page table.
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
@@ -156,24 +161,30 @@ copy_page_table(struct addrspace *dst,
 			KASSERT(src_pte != NULL);
 			if (src_pte->status & VM_PTE_VALID) {
 				// Copy memory to memory.
-				// We must release our page table before requesting memory.
+				// First copy from user space to kernel while we know src page
+				// is in memory:
+				// 1) Ensures it won't get evicted.
+				// 2) Avoid potential vm faults when copying back to user space.
+				// Use direct addressing so we don't fault here.
+				memmove(page_buf, 
+				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
+				// We must release our page tables before requesting dst memory.
 				// Otherwise eviction can deadlock if there is a mutual
 				// eviction from the victim address space.
+				// This could cause the src page to get evicted, which is why we
+				// copied to kernel memory above.
+				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
 				dst_pte->paddr = alloc_pages(1, dst, vaddr);
 				lock_acquire(dst->pages_lock);
+				lock_acquire(src->pages_lock);
 				if (dst_pte->paddr == 0) {
 					return ENOMEM;
 				}
-				// Accessing src pages may cause a vm fault, so we need to
-				// release the src page table so the vm system can access it.
-				// It's possible the src page will get swapped out in the meantime,
-				// but if so, the vm system will just swap it back in, which is
-				// slow but still correct.
-				lock_release(src->pages_lock);
+				// Use direct addressing so we don't fault, which would cause
+				// deadlock when accessing the page table we already have locked.
                 memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
-                  (const void *)vaddr, PAGE_SIZE);
-				lock_acquire(src->pages_lock);
+                  (const void *)page_buf, PAGE_SIZE);
 			} else if (src_pte->status & VM_PTE_BACKED) {
 				// Copy swap to swap.
 				result = copy_swap_page(dst_pte, src_pte, page_buf);
@@ -227,6 +238,8 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	dst->vheaptop = src->vheaptop;
 	lock_release(src->heap_lock);
 
+	// Scratch memory for copying swap pages if needed.
+	// Allocate once here per process for efficiency.
 	page_buf = kmalloc(sizeof(char) * PAGE_SIZE);
 	if (page_buf == NULL) {
 		as_destroy(dst);
@@ -235,14 +248,13 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 
 	lock_acquire(src->pages_lock);
 	lock_acquire(dst->pages_lock);
-	// Scratch memory for copying swap pages if needed.
-	// Allocate once here per process for efficiency.
+	// TODO(aabo): bigfork fails here.
+	KASSERT(as_validate_page_table(src) == 0);
 	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0, page_buf);
+	KASSERT(as_validate_page_table(dst) == 0);
 	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
-
-	KASSERT(as_validate_page_table(dst) == 0);
-
+	
 	kfree(page_buf);
 	if (result) {
 		as_destroy(dst);
@@ -334,6 +346,15 @@ destroy_page_table(void **pages, int level)
 	}
 }
 
+/*
+ * Helper function for as_validate_page_table.
+ *
+ * Args:
+ *   as: Pointer to address space to validate.
+ *   pages: Pointer to page table.
+ *   level: Current level of table to traverse starting at 0.
+ *   vpn: Virtual page number (no page offset bits) .
+ */
 static void
 validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn) 
 {
@@ -365,6 +386,8 @@ validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn)
 /*
  * Validates page table is consistent with address space and coremap.
  *
+ * Caller is responsible for locking page table.
+ *
  * Returns:
  *   0 if valid, else panics.
  */
@@ -372,9 +395,8 @@ int
 as_validate_page_table(struct addrspace *as)
 {
 	//KASSERT(as->next_segment > 0);
-    lock_acquire(as->pages_lock);
+	KASSERT(lock_do_i_hold(as->pages_lock));
 	validate_page_table(as, as->pages0, 0, 0x0);
-	lock_release(as->pages_lock);
     return 0;
 }
 
