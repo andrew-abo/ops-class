@@ -33,27 +33,31 @@ vmtest1(int nargs, char **args)
 
 	// Allocate all memory in blocks of uniform sizes.
 	for (block_size = 1; block_size < 16; block_size++) {
+        lock_acquire_coremap();
         for (i = 0; i < BLOCKS; i++) {
-            paddr[i] = alloc_pages(block_size, NULL, (vaddr_t)NULL);
+            paddr[i] = alloc_pages(block_size);
             if (paddr[i] == (paddr_t)NULL) {
 				kprintf("Attempt to exhaust memory successful.\n");
                 break;
             }
         }
+		lock_release_coremap();
         used_bytes1 = coremap_used_bytes();
         KASSERT(used_bytes1 - used_bytes0 == (unsigned) i * block_size * PAGE_SIZE);
         i--;
         kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
         // Free in descending order.
+		lock_acquire_coremap();
         for (int j = i; j >= 0; j--) {
             free_pages(paddr[j]);
         }
 
         // Should be at least one free page now.
-		paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+		paddr[0] = alloc_pages(1);
 		KASSERT(paddr[0] != (paddr_t)NULL);
 		free_pages(paddr[0]);
+		lock_release_coremap();
 
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
@@ -83,26 +87,30 @@ vmtest2(int nargs, char **args)
 
 	// Allocate all memory in blocks of uniform sizes.
 	for (block_size = 1; block_size < 16; block_size++) {
+		lock_acquire_coremap();
         for (i = 0; i < BLOCKS; i++) {
-            paddr[i] = alloc_pages(block_size, NULL, (vaddr_t)NULL);
+            paddr[i] = alloc_pages(block_size);
             if (paddr[i] == (paddr_t)NULL) {
 				kprintf("Attempt to exhaust memory successful.\n");
                 break;
             }
         }
+		lock_release_coremap();
         used_bytes1 = coremap_used_bytes();
         KASSERT(used_bytes1 - used_bytes0 == (unsigned) i * block_size * PAGE_SIZE);
         i--;
         kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
         // Free in ascending order.
+		lock_acquire_coremap();
         for (int j = 0; j <= i; j++) {
             free_pages(paddr[j]);
         }
         // Should be at least one free page now.
-		paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+		paddr[0] = alloc_pages(1);
 		KASSERT(paddr[0] != (paddr_t)NULL);
 		free_pages(paddr[0]);
+		lock_release_coremap();
 
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
@@ -133,28 +141,32 @@ vmtest3(int nargs, char **args)
 
     // Allocate all memory in blocks of random sizes up to 32.
     my_used_pages = 0;
+	lock_acquire_coremap();
     for (i = 0; i < BLOCKS; i++) {
 		block_size = random() % 32 + 1;
-		paddr[i] = alloc_pages(block_size, NULL, (vaddr_t)NULL);
+		paddr[i] = alloc_pages(block_size);
 		if (paddr[i] == (paddr_t)NULL) {
 			break;
 		}
 		my_used_pages += block_size;
 	}
+	lock_release_coremap();
 	used_bytes1 = coremap_used_bytes();
 	KASSERT(used_bytes1 - used_bytes0 == my_used_pages * PAGE_SIZE);
 	i--;
 	kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
 	// Free in descending order.
+	lock_acquire_coremap();
 	for (int j = i; j >= 0; j--) {
 		free_pages(paddr[j]);
     }
 
     // Should be at least one free page now.
-    paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+    paddr[0] = alloc_pages(1);
     KASSERT(paddr[0] != (paddr_t)NULL);
     free_pages(paddr[0]);
+	lock_release_coremap();
     
     KASSERT(coremap_used_bytes() == used_bytes0);
 	set_swap_enabled(swap_enabled);
@@ -184,28 +196,32 @@ vmtest4(int nargs, char **args)
 
     // Allocate all memory in blocks of random sizes up to 32.
     my_used_pages = 0;
+	lock_acquire_coremap();
     for (i = 0; i < BLOCKS; i++) {
 		block_size = random() % 32 + 1;
-		paddr[i] = alloc_pages(block_size, NULL, (vaddr_t)NULL);
+		paddr[i] = alloc_pages(block_size);
 		if (paddr[i] == (paddr_t)NULL) {
 			break;
 		}
 		my_used_pages += block_size;
 	}
+	lock_release_coremap();
 	used_bytes1 = coremap_used_bytes();
 	KASSERT(used_bytes1 - used_bytes0 == my_used_pages * PAGE_SIZE);
 	i--;
 	kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
 	// Free in ascending order.
+	lock_acquire_coremap();
 	for (int j = 0; j <= i; j++) {
 		free_pages(paddr[j]);
     }
 
     // Should be at least one free page now.
-    paddr[0] = alloc_pages(1, NULL, (vaddr_t)NULL);
+    paddr[0] = alloc_pages(1);
     KASSERT(paddr[0] != (paddr_t)NULL);
     free_pages(paddr[0]);
+	lock_release_coremap();
 
     KASSERT(coremap_used_bytes() == used_bytes0);
 	set_swap_enabled(swap_enabled);
@@ -260,7 +276,7 @@ vmtest6(int nargs, char **args)
 	int result;
 	unsigned i;
 	struct pte *pte;
-	vaddr_t faultaddress = 0x10000;
+	const vaddr_t faultaddress = 0x10000;
 	struct addrspace *as;
 	(void)nargs;
 	(void)args;
@@ -279,9 +295,13 @@ vmtest6(int nargs, char **args)
 	}
 
 	// Swap page out.
-	result = maybe_swap_out(pte, /*dirty=*/1);
+	lock_acquire(as->pages_lock);
+	result = swap_out(pte, /*dirty=*/1);
+	lock_release(as->pages_lock);
 	KASSERT(result == 0);
+	lock_acquire_coremap();
 	free_pages(paddr);
+	lock_release_coremap();
 	
 	// Zero out the old memory for good meeasure.
 	bzero((void *)vaddr, PAGE_SIZE);
@@ -308,7 +328,7 @@ vmtest7(int nargs, char **args)
 {
 	int result;
 	unsigned used_bytes0;
-	vaddr_t faultaddress = 0x10000;
+	const vaddr_t faultaddress = 0x10000;
 	struct addrspace *as;
 	(void)nargs;
 	(void)args;
@@ -346,7 +366,7 @@ vmtest8(int nargs, char **args)
 	struct addrspace *as;
 	paddr_t paddr;
 	unsigned p;
-	unsigned pages = 1000;
+	const unsigned pages = 1000;
 	struct pte *pte;
 	(void)nargs;
 	(void)args;
@@ -396,7 +416,7 @@ vmtest9(int nargs, char **args)
 	int old_swap_enabled;
 	// Choose a number large enough to exhaust memory when
 	// swap is disabled.
-	unsigned test_pages = 4096;
+	const unsigned test_pages = 4096;
 
 	// Disable swapping while we exhaust memory.
 	old_swap_enabled = set_swap_enabled(0);
@@ -429,6 +449,7 @@ vmtest9(int nargs, char **args)
 	set_swap_enabled(1);
 
 	// Evict a page.
+	lock_acquire_coremap();
 	result = evict_page(&core_idx);
 	KASSERT(result == 0);
 	paddr = core_idx_to_paddr(core_idx);
@@ -439,15 +460,17 @@ vmtest9(int nargs, char **args)
 
 	// Page-in from swapdisk.
 	vaddr = core_idx_to_vaddr[core_idx];
+
 	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, vaddr);
-	lock_release(as->pages_lock);
 	KASSERT(pte != NULL);
 	block_read(pte->block_index, paddr);
 	// Check unique test pattern has been restored.
 	KASSERT(*(unsigned *)kvaddr == vaddr / 0x1000);
-
 	free_pages(paddr);
+	lock_release(as->pages_lock);
+	lock_release_coremap();
+
     as_destroy(as);
 	kfree(core_idx_to_vaddr);
 
@@ -472,7 +495,7 @@ vmtest10(int nargs, char **args)
 	size_t swap0, swap1;
 	size_t mem0, mem1;
 	// Choose a number that is large enough to cause some page evictions.
-	unsigned test_pages = 4096;
+	const unsigned test_pages = 4096;
 
 	mem0 = coremap_used_bytes();
 	swap0 = swap_used_pages();
@@ -483,6 +506,10 @@ vmtest10(int nargs, char **args)
 
     // Exhaust memory to cause some page evictions.
     for (p = 0; p < test_pages; p++) {
+		if (p % 64 == 0) {
+			kprintf("\n");
+		}
+		kprintf(".");
 		vaddr = 0x1000 * p;
         pte = create_test_page(as, vaddr);
 		KASSERT(pte != NULL);
@@ -490,6 +517,8 @@ vmtest10(int nargs, char **args)
 
 	// Clean up.
     as_destroy(as);
+
+	// Verify memory and swap have been cleaned up.
 	mem1 = coremap_used_bytes();
 	swap1 = swap_used_pages();
 	KASSERT(swap0 == swap1);

@@ -159,7 +159,7 @@ boot(void)
 	thread_bootstrap();
 	
 	// Coremap requires sleep locks, which require threads.
-	// kmalloc can be kfree'd after coremap is initialized.
+	// kfree doesn't do anything until after coremap is initialized.
 	vm_init_coremap();
 
 	/* Post virtual memory available */

@@ -65,6 +65,8 @@ void vm_init_coremap(void);
 // Test and debug support.
 void lock_and_dump_coremap(void);
 int as_in_coremap(struct addrspace *as);
+int validate_coremap(void);
+
 // Initialize swap system.
 void vm_bootstrap(void);
 
@@ -77,7 +79,7 @@ int block_read(unsigned block_index, paddr_t paddr);
 int get_page_via_table(struct addrspace *as, vaddr_t faultaddress);
 void free_swapmap_block(int block_index);
 size_t swap_used_pages(void);
-int maybe_swap_out(struct pte *pte, int dirty);
+int swap_out(struct pte *pte, int dirty);
 
 /* Fault handling function called by trap code */
 int vm_fault(int faulttype, vaddr_t faultaddress);
@@ -89,14 +91,17 @@ vaddr_t alloc_kpages(unsigned npages);
 void free_kpages(vaddr_t vaddr);
 
 /* Allocate/free coremap pages */
-paddr_t alloc_pages(unsigned npages, struct addrspace *as, vaddr_t vaddr);
+paddr_t alloc_pages(unsigned npages);
 void free_pages(vaddr_t vaddr);
 void vm_tlb_erase(void);
 unsigned paddr_to_core_idx(paddr_t paddr);
 paddr_t core_idx_to_paddr(unsigned p);
+unsigned coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr);
 
 struct addrspace *vm_get_as(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);
+void lock_acquire_coremap(void);
+void lock_release_coremap(void);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

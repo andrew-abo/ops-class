@@ -43,17 +43,22 @@ struct pte
         return NULL;
     }
 	// Page must not already exist.
-	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));
-	
+	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));	
     lock_release(as->pages_lock);
-    paddr = alloc_pages(1, as, vaddr);
+
+    lock_acquire_coremap();
+    paddr = alloc_pages(1);
     if (paddr == (paddr_t)NULL) {
+        lock_release_coremap();
         return NULL;
     }
     lock_acquire(as->pages_lock);
+    coremap_assign_vaddr(paddr, as, vaddr);
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
 	lock_release(as->pages_lock);
+    lock_release_coremap();
+
     return pte;
 }
 
@@ -412,3 +417,79 @@ addrspacetest10(int nargs, char **args)
 	return 0;
 }
 
+// Allocate all pages then copy addrspace.
+int
+addrspacetest11(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *src, *dst;
+    struct pte *src_pte, *dst_pte;
+    vaddr_t vaddr;
+    int i;
+    int result;
+	size_t swap0, swap1;
+	size_t mem0, mem1;
+	const int test_pages = 512;
+
+    kprintf("Starting as11 test...\n");
+
+	mem0 = coremap_used_bytes();
+	swap0 = swap_used_pages();
+
+    src = as_create();
+    KASSERT(src != NULL);
+
+    // Exhaust user memory.
+    kprintf("Create pages\n");
+    for (i = 0; i < test_pages; i++) {
+		if (i % 64 == 0) {
+			kprintf("\n");
+		}
+		kprintf(".");
+        vaddr = i * PAGE_SIZE;
+        src_pte = create_test_page(src, vaddr);
+        KASSERT(src_pte != NULL);
+    }
+    kprintf("\n");
+
+    result = as_copy(src, &dst);
+    KASSERT(result == 0);
+
+    // Check if copy matches source.
+    lock_acquire(src->pages_lock);
+    lock_acquire(dst->pages_lock);
+    kprintf("Check page tables\n");
+    for (i = 0; i < test_pages; i++) {
+		if (i % 64 == 0) {
+			kprintf("\n");
+		}
+		kprintf(".");
+        vaddr = i * PAGE_SIZE;
+        src_pte = as_lookup_pte(src, vaddr);
+        KASSERT(src_pte != NULL);
+        dst_pte = as_lookup_pte(dst, vaddr);
+        KASSERT(dst_pte != NULL);
+        // We would like to access all the virtual addresses
+        // and see if page faults retrieve the correct contents
+        // either from memory or swap.  But, since this is a 
+        // kernel test, there is no active addrspace, so we
+        // can't test end-to-end access of virtual addresses.
+        // We can only do some sanity checking that the data
+        // structures exist.
+    }
+    lock_release(src->pages_lock);
+    lock_release(dst->pages_lock);
+
+    as_destroy(src);
+    as_destroy(dst);
+
+	// Verify memory and swap have been cleaned up.
+	mem1 = coremap_used_bytes();
+	swap1 = swap_used_pages();
+	KASSERT(swap0 == swap1);
+	KASSERT(mem0 == mem1);
+
+	success(TEST161_SUCCESS, SECRET, "as11");
+	return 0;
+}

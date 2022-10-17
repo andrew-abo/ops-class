@@ -69,6 +69,7 @@ as_create(void)
 		return NULL;
 	}
 	as->next_segment = 0;
+	// Create empty page table.
 	for (int p = 0; p < 1<<VPN_BITS_PER_LEVEL; p++) {
 		as->pages0[p] = NULL;
 	}
@@ -104,8 +105,10 @@ copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
 	if (result) {
 		return result;
 	}
+	// dst page is in memory, but not backed and is dirty
+	// => swap_out will allocate a new swap block and write page.
 	dst_pte->status = VM_PTE_VALID;
-    return maybe_swap_out(dst_pte, /*dirty=*/1);
+    return swap_out(dst_pte, /*dirty=*/1);
 }
 
 /*
@@ -141,6 +144,7 @@ copy_page_table(struct addrspace *dst,
 	vaddr_t vaddr, next_vpn;
 	void **next_pages;
 	int result;
+	paddr_t paddr;
 
 	KASSERT(lock_do_i_hold(src->pages_lock));
 	KASSERT(lock_do_i_hold(dst->pages_lock));
@@ -152,7 +156,6 @@ copy_page_table(struct addrspace *dst,
 		if (level == PT_LEVELS - 1) {
 			// Make copy of physical page.
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
-
 			dst_pte = as_touch_pte(dst, vaddr);
 			if (dst_pte == NULL) {
 				return ENOMEM;
@@ -168,31 +171,35 @@ copy_page_table(struct addrspace *dst,
 				// Use direct addressing so we don't fault here.
 				memmove(page_buf, 
 				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
-				// We must release our page tables before requesting dst memory.
-				// Otherwise eviction can deadlock if there is a mutual
-				// eviction from the victim address space.
-				// This could cause the src page to get evicted, which is why we
-				// copied to kernel memory above.
+				// Follow VM locking order when potentially evicting.
 				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
-				dst_pte->paddr = alloc_pages(1, dst, vaddr);
+				// Modify coremap and page table together atomically.		
+				lock_acquire_coremap();
 				lock_acquire(dst->pages_lock);
 				lock_acquire(src->pages_lock);
-				if (dst_pte->paddr == 0) {
+				paddr = alloc_pages(1);
+				if (paddr == 0) {
+					lock_release_coremap();
 					return ENOMEM;
 				}
+				coremap_assign_vaddr(paddr, dst, vaddr);
+				dst_pte->paddr = paddr;
 				// Use direct addressing so we don't fault, which would cause
 				// deadlock when accessing the page table we already have locked.
                 memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
                   (const void *)page_buf, PAGE_SIZE);
+				//lock_release_coremap();
+				dst_pte->status = VM_PTE_VALID;
+				lock_release_coremap();
 			} else if (src_pte->status & VM_PTE_BACKED) {
 				// Copy swap to swap.
 				result = copy_swap_page(dst_pte, src_pte, page_buf);
 				if (result) {
 					return result;
 				}
+				dst_pte->status = VM_PTE_BACKED;
 			} // else page does not have any data.
-			dst_pte->status = src_pte->status;
 			continue;
         }
 		next_pages = src_pages[idx];
@@ -213,10 +220,6 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	struct addrspace *dst;
 	char *page_buf;
 	int result;
-
-	// We assume src is the active address space so that we can reference
-	// source pages with virtual addresses.
-	KASSERT(proc_getas() == src);
 
 	*ret = NULL;
 	dst = as_create();
@@ -249,12 +252,16 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	lock_acquire(src->pages_lock);
 	lock_acquire(dst->pages_lock);
 	// TODO(aabo): bigfork fails here.
-	KASSERT(as_validate_page_table(src) == 0);
+	//lock_acquire_coremap();
+	//KASSERT(as_validate_page_table(src) == 0);
+	//lock_release_coremap();
 	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0, page_buf);
-	KASSERT(as_validate_page_table(dst) == 0);
+	//lock_acquire_coremap();
+	//KASSERT(as_validate_page_table(dst) == 0);
+	//lock_release_coremap();
 	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
-	
+
 	kfree(page_buf);
 	if (result) {
 		as_destroy(dst);
@@ -283,8 +290,8 @@ visit_page_table(void **pages, int level, vaddr_t vpn)
 			pte = ((struct pte *)pages) + idx;
 			// TODO(aabo): Unify some page table walking functions to reduce 
 			// code duplication.
-            kprintf("%s[%2d] v0x%08x -> p0x%08x: status=0x%x\n", tab[level], 
-			  idx, vaddr, pte->paddr, pte->status);
+            kprintf("%s[%2d] v0x%08x -> p0x%08x: status=0x%x, block_index=%u\n", tab[level], 
+			  idx, vaddr, pte->paddr, pte->status, pte->block_index);
 			continue;
         }
 		next_pages = pages[idx];
@@ -306,44 +313,6 @@ dump_page_table(struct addrspace *as)
 	lock_acquire(as->pages_lock);
     visit_page_table(as->pages0, 0, 0x0);
 	lock_release(as->pages_lock);
-}
-
-/*
- * Descend multi-level page table and free dynamic memory
- * used by table iteself and coremap pages referenced
- * by page table.  To destroy table from the top:
- * 
- * destroy_page_table(as->pages0, 0)
- * 
- * Args:
- *   pages: Pointer to array of pages, e.g. as->pages0.
- *   level: Starting level to descend from, e.g. 0.
- */
-static void
-destroy_page_table(void **pages, int level) 
-{
-	struct pte *pte;
-
-	int next_level = level + 1;
-	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
-		if (level == PT_LEVELS - 1) {
-			pte = ((struct pte *)pages) + idx;
-			if (pte->status & VM_PTE_VALID) {
-                free_pages(pte->paddr);
-            }
-			if (pte->status & VM_PTE_BACKED) {
-                free_swapmap_block(pte->block_index);
-			}
-			continue;
-        }
-        if (pages[idx] == NULL) {
-			continue;
-		}
-		destroy_page_table(pages[idx], next_level);
-	}
-	if (level > 0) {
-        kfree(pages);
-	}
 }
 
 /*
@@ -394,10 +363,47 @@ validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn)
 int
 as_validate_page_table(struct addrspace *as)
 {
-	//KASSERT(as->next_segment > 0);
 	KASSERT(lock_do_i_hold(as->pages_lock));
 	validate_page_table(as, as->pages0, 0, 0x0);
     return 0;
+}
+
+/*
+ * Descend multi-level page table and free dynamic memory
+ * used by table iteself and coremap pages referenced
+ * by page table.  To destroy table from the top:
+ * 
+ * destroy_page_table(as->pages0, 0)
+ * 
+ * Args:
+ *   pages: Pointer to array of pages, e.g. as->pages0.
+ *   level: Starting level to descend from, e.g. 0.
+ */
+static void
+destroy_page_table(void **pages, int level) 
+{
+	struct pte *pte;
+
+	int next_level = level + 1;
+	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
+		if (level == PT_LEVELS - 1) {
+			pte = ((struct pte *)pages) + idx;
+			if (pte->status & VM_PTE_VALID) {
+                free_pages(pte->paddr);
+            }
+			if (pte->status & VM_PTE_BACKED) {
+                free_swapmap_block(pte->block_index);
+			}
+			continue;
+        }
+        if (pages[idx] == NULL) {
+			continue;
+		}
+		destroy_page_table(pages[idx], next_level);
+	}
+	if (level > 0) {
+        kfree(pages);
+	}
 }
 
 /*
@@ -407,10 +413,21 @@ as_validate_page_table(struct addrspace *as)
 void
 as_destroy(struct addrspace *as)
 {
-	KASSERT(!lock_do_i_hold(as->pages_lock));
-	KASSERT(!lock_do_i_hold(as->heap_lock));
+	KASSERT(as != NULL);
+
+	// Follow VM locking order to avoid another process trying to evict pages
+	// from the addrspace we are destroying.
+	lock_acquire_coremap();
+	lock_acquire(as->pages_lock);
+
+	// TODO(aabo): bigfork fails.
 	destroy_page_table(as->pages0, 0);
+	lock_release(as->pages_lock);
+	KASSERT(validate_coremap() == 0);
+	lock_release_coremap();
+
 	lock_destroy(as->pages_lock);
+	KASSERT(!lock_do_i_hold(as->heap_lock));
 	lock_destroy(as->heap_lock);
 	KASSERT(!as_in_coremap(as));
 	kfree(as);
@@ -765,11 +782,13 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 {
 	struct pte *pte;
 
+	lock_acquire_coremap();
 	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, vaddr);
 	if (pte == NULL) {
 		// Silently ignores non-existent pages.
 		lock_release(as->pages_lock);
+		lock_release_coremap();
 		return;
 	}
 	if (pte->status & VM_PTE_VALID) {
@@ -782,5 +801,5 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 	pte->block_index = 0;
 	pte->paddr = (paddr_t)NULL;
 	lock_release(as->pages_lock);
+	lock_release_coremap();
 }
-
