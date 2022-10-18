@@ -48,7 +48,27 @@
 // At boot coremap is disabled until it has been initialized.
 static int coremap_enabled = 0;
 
-static struct lock *coremap_lock;
+// Coremap lock must be a spinlock because we need to call kfree from
+// interrupt handlers which can deadlock if they go to sleep.
+static struct spinlock coremap_lock;
+
+// paging_lock is the gatekeeper for performing an operation that modifies
+// both the coremap and an addrspace page table.  The synchronization policy
+// is requires this order:
+// 0. Release all page table locks if requesting memory.
+// 1. Lock paging_lock (sleep lock)
+// 2. Lock as->pages_lock (sleep lock)
+// 3. Lock coremap (spinlock)
+// 4. Modify coremap and page table togther as one atomic edit.
+// 5. Release coremap
+// 6. Release as->pages_lock
+// 7. Release vm_lock
+// This order avoids a deadlock where two processes are trying to evict
+// from the other's page table, for example.  The process which grabs
+// vm_lock first will block the other from locking any page tables.  It
+// also ensures the operation does not leave the coremap and page table
+// in an inconsistent state.
+//static struct lock *paging_lock;
 
 // Acquire coremap_lock before accessing any of these shared variables.
 static paddr_t firstpaddr;  // First byte that can be allocated.
@@ -76,15 +96,15 @@ static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
  * lock coremap outside this module.
  *
  */
-void lock_acquire_coremap() {
-	lock_acquire(coremap_lock);
+void spinlock_acquire_coremap() {
+	spinlock_acquire(&coremap_lock);
 }
 
 /*
  * Release coremap lock outside this module.
  */
-void lock_release_coremap() {
-	lock_release(coremap_lock);
+void spinlock_release_coremap() {
+	spinlock_release(&coremap_lock);
 }
 
 /*
@@ -169,7 +189,7 @@ dump_coremap()
 	unsigned npages;
 	unsigned status;
 	
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
@@ -190,7 +210,7 @@ as_in_coremap(struct addrspace *as)
 	unsigned p;
 	int found_as = 0;
 
-	lock_acquire(coremap_lock);
+	spinlock_acquire(&coremap_lock);
 	for (p = 0; p < page_max;) {
 		if (coremap[p].as == as) {
             found_as = 1;
@@ -198,15 +218,15 @@ as_in_coremap(struct addrspace *as)
 		}
 		p += get_core_npages(p);
 	}
-	lock_release(coremap_lock);
+	spinlock_release(&coremap_lock);
 	return found_as;
 }
 
 void lock_and_dump_coremap()
 {
-    lock_acquire(coremap_lock);
+    spinlock_acquire(&coremap_lock);
 	dump_coremap();
-	lock_release(coremap_lock);
+	spinlock_release(&coremap_lock);
 }
 
 /*
@@ -236,7 +256,7 @@ struct addrspace
     unsigned p;
 	struct addrspace *as;
 
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 	p = paddr_to_core_idx(paddr);
 	as = coremap[p].as;
 	return as;
@@ -251,7 +271,7 @@ vm_get_vaddr(paddr_t paddr)
     unsigned p;
     vaddr_t vaddr;
 
-    KASSERT(lock_do_i_hold(coremap_lock));
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
 	p = paddr_to_core_idx(paddr);
 	vaddr = coremap[p].vaddr;
 	return vaddr;
@@ -311,7 +331,7 @@ validate_coremap()
 	unsigned npages;
     unsigned status;
 
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
     KASSERT(next_fit < page_max);
 	for (p = 0; p < page_max; p += npages) {
 		if (p > 0) {
@@ -368,13 +388,9 @@ vm_init_coremap()
 	paddr_t coremap_paddr;
 	unsigned p;
 
-	// Requires a primitive version of alloc_kpages() to be
-	// available to support kmalloc until we can switch over
-	// to recyclable coremap memory.
-	coremap_lock = lock_create("coremap");
-	if (coremap_lock == NULL) {
-		panic("vm_init_coremap: Cannot create coremap_lock.");
-	}
+	// Optional: dynamic data structures can be kmalloc'd here
+	// before the coremap is enabled.  Any pre-coremap allocated
+	// memory, however, will never be freed.
 
 	lastpaddr = ram_getsize();
 	// RAM initialization can only occur once and locks in any
@@ -411,10 +427,12 @@ vm_init_coremap()
 	// Includes kernel and coremap in used_bytes.
 	used_bytes = p * PAGE_SIZE;
 
+	// Switch from ram_stealmem allocater to coremap.
 	coremap_enabled = 1;
-	lock_acquire(coremap_lock);
+
+	spinlock_acquire(&coremap_lock);
 	KASSERT(validate_coremap() == 0);
-	lock_release(coremap_lock);
+	spinlock_release(&coremap_lock);
 
 	kprintf("\nvm_init_coremap\n");
 	kprintf("lastpaddr  = 0x%08x\n", lastpaddr);
@@ -552,7 +570,7 @@ find_victim_page()
 	unsigned victim;
 	unsigned user_pages = 0;
 	
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 
 	// TODO(aabo): Replace simple policy with higher performance policy
 	// such as CLOCK.
@@ -652,7 +670,7 @@ evict_page(unsigned *coremap_index)
 	int p;
 	int old_as_already_locked;
 
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 	
 	// Identify a page to evict.
 	p = find_victim_page();
@@ -707,7 +725,7 @@ get_ppages(unsigned npages)
     unsigned p;  // Page index into coremap.
 	unsigned block_pages;
 
-    KASSERT(lock_do_i_hold(coremap_lock));
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
 	KASSERT(npages > 0);
 
 	p = next_fit;
@@ -741,7 +759,7 @@ unsigned
 coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr) {
     unsigned p;
 
-    KASSERT(lock_do_i_hold(coremap_lock));
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
 	p = paddr_to_core_idx(paddr);
 	coremap[p].as = as;
 	coremap[p].vaddr = vaddr;
@@ -769,7 +787,7 @@ coremap_assign_to_kernel(unsigned p, unsigned npages)
 	unsigned prev;
 	unsigned next;
 
-    KASSERT(lock_do_i_hold(coremap_lock));
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
 
 	block_pages = get_core_npages(p);
 	KASSERT(block_pages >= npages);
@@ -828,7 +846,7 @@ alloc_pages(unsigned npages)
     unsigned p;  // Page index into coremap.
 	int result;
 
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 
 	p = get_ppages(npages);
 	if (p == 0) {
@@ -855,9 +873,9 @@ alloc_kpages_post_boot(unsigned npages)
 {
 	paddr_t paddr;
 
-	lock_acquire(coremap_lock);
+	spinlock_acquire(&coremap_lock);
 	paddr = alloc_pages(npages);
-	lock_release(coremap_lock);
+	spinlock_release(&coremap_lock);
 	if (paddr == 0) {
 		return 0;
 	}
@@ -931,20 +949,14 @@ alloc_kpages(unsigned npages)
 void
 free_kpages(vaddr_t vaddr)
 {
-	paddr_t paddr;
-	int coremap_already_locked;
+	paddr_t paddr;	//TODO(aabo): I added this assert. Why?
 
 	if (coremap_enabled) {
         KASSERT((vaddr & PAGE_FRAME) == vaddr);
         paddr = KVADDR_TO_PADDR(vaddr);
-		coremap_already_locked = lock_do_i_hold(coremap_lock);
-		if (!coremap_already_locked) {
-			lock_acquire(coremap_lock);
-		}
+		spinlock_acquire(&coremap_lock);
         free_pages(paddr);
-        if (!coremap_already_locked) {
-            lock_release(coremap_lock);
-		}
+		spinlock_release(&coremap_lock);
 	}
 }
 
@@ -965,7 +977,7 @@ free_pages(paddr_t paddr)
 	KASSERT((paddr >= firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
 
-	KASSERT(lock_do_i_hold(coremap_lock));
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
 
 	// Free this block.
 	KASSERT(coremap[p].status & VM_CORE_USED);
@@ -1022,9 +1034,9 @@ coremap_used_bytes() {
 	unsigned result;
 
 	if (coremap_enabled) {
-        lock_acquire(coremap_lock);
+        spinlock_acquire(&coremap_lock);
         result = used_bytes;
-        lock_release(coremap_lock);
+        spinlock_release(&coremap_lock);
         return result;
 	}
 	return 0;
@@ -1057,12 +1069,12 @@ flag_page_as_dirty(vaddr_t vaddr)
 	// Only user space pages should be in the TLB.
 	KASSERT(vaddr < MIPS_KSEG0);
 
-	lock_acquire(coremap_lock);
+	spinlock_acquire(&coremap_lock);
 	spl = splhigh();
 	tlb_idx = tlb_probe(vaddr & PAGE_FRAME, 0);
 	if (tlb_idx < 0) {
         splx(spl);
-        lock_release(coremap_lock);
+        spinlock_release(&coremap_lock);
         return 1;
     }
     tlb_read(&entryhi, &entrylo, tlb_idx);
@@ -1072,7 +1084,7 @@ flag_page_as_dirty(vaddr_t vaddr)
     p = paddr_to_core_idx(paddr);
     coremap[p].status |= VM_CORE_DIRTY;
     splx(spl);
-    lock_release(coremap_lock);
+    spinlock_release(&coremap_lock);
 
     return 0;
 }
@@ -1115,9 +1127,9 @@ paddr_t
 locking_find_victim_page()
 {
 	paddr_t paddr;
-	lock_acquire(coremap_lock);
+	spinlock_acquire(&coremap_lock);
 	paddr = find_victim_page();
-	lock_release(coremap_lock);
+	spinlock_release(&coremap_lock);
 	return paddr;
 }
 
@@ -1165,10 +1177,10 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	// and restore if it was previously swapped out.
 
 	// Modify coremap and page table together atomically.
-	lock_acquire(coremap_lock);
+	spinlock_acquire(&coremap_lock);
 	paddr = alloc_pages(1);
 	if (paddr == 0) {
-        lock_release(coremap_lock);
+        spinlock_release(&coremap_lock);
         return ENOMEM;
     }
     lock_acquire(as->pages_lock);
@@ -1178,7 +1190,7 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
         if (result) {
             free_pages(paddr);
             lock_release(as->pages_lock);
-            lock_release(coremap_lock);
+            spinlock_release(&coremap_lock);
             return EIO;
         }
     }
@@ -1189,7 +1201,7 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
     KASSERT(as_validate_page_table(as) == 0);
     vm_tlb_insert(pte->paddr, faultaddress);
     lock_release(as->pages_lock);
-    lock_release(coremap_lock);
+    spinlock_release(&coremap_lock);
 		
     return 0;
 }
@@ -1244,7 +1256,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		 * in boot. Return EFAULT so as to panic instead of
 		 * getting into an infinite faulting loop.
 		 */
-		panic("vm_fault: curproc == NULL");
 		return EFAULT;
 	}
 
@@ -1254,7 +1265,6 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		 * No address space set up. This is probably also a
 		 * kernel fault early in boot.
 		 */
-		panic("vm_fault: as == NULL");
 		return EFAULT;
 	}
 

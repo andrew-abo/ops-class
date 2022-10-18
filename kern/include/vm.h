@@ -100,8 +100,8 @@ unsigned coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr
 
 struct addrspace *vm_get_as(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);
-void lock_acquire_coremap(void);
-void lock_release_coremap(void);
+void spinlock_acquire_coremap(void);
+void spinlock_release_coremap(void);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If

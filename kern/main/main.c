@@ -152,17 +152,10 @@ boot(void)
 	kprintf("\n");
 
 	/* Early boot. */
-	// Coremap is not available yet. kmalloc'd memory is forever,
-	// so use sparingly.
 	ram_bootstrap();
+	vm_init_coremap();
 	proc_bootstrap();
 	thread_bootstrap();
-	
-	// Coremap requires sleep locks, which require threads.
-	// kfree doesn't do anything until after coremap is initialized.
-	vm_init_coremap();
-
-	/* Post virtual memory available */
 	hardclock_bootstrap();
 	vfs_bootstrap();
 	kheap_nextgeneration();

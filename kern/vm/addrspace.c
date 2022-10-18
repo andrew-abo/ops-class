@@ -175,12 +175,12 @@ copy_page_table(struct addrspace *dst,
 				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
 				// Modify coremap and page table together atomically.		
-				lock_acquire_coremap();
+				spinlock_acquire_coremap();
 				lock_acquire(dst->pages_lock);
 				lock_acquire(src->pages_lock);
 				paddr = alloc_pages(1);
 				if (paddr == 0) {
-					lock_release_coremap();
+					spinlock_release_coremap();
 					return ENOMEM;
 				}
 				coremap_assign_vaddr(paddr, dst, vaddr);
@@ -189,9 +189,9 @@ copy_page_table(struct addrspace *dst,
 				// deadlock when accessing the page table we already have locked.
                 memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
                   (const void *)page_buf, PAGE_SIZE);
-				//lock_release_coremap();
+				//spinlock_release_coremap();
 				dst_pte->status = VM_PTE_VALID;
-				lock_release_coremap();
+				spinlock_release_coremap();
 			} else if (src_pte->status & VM_PTE_BACKED) {
 				// Copy swap to swap.
 				result = copy_swap_page(dst_pte, src_pte, page_buf);
@@ -251,14 +251,18 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 
 	lock_acquire(src->pages_lock);
 	lock_acquire(dst->pages_lock);
+	
 	// TODO(aabo): bigfork fails here.
-	//lock_acquire_coremap();
-	//KASSERT(as_validate_page_table(src) == 0);
-	//lock_release_coremap();
+	spinlock_acquire_coremap();
+	KASSERT(as_validate_page_table(src) == 0);
+	spinlock_release_coremap();
+	
 	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0, page_buf);
-	//lock_acquire_coremap();
-	//KASSERT(as_validate_page_table(dst) == 0);
-	//lock_release_coremap();
+	
+	spinlock_acquire_coremap();
+	KASSERT(as_validate_page_table(dst) == 0);
+	spinlock_release_coremap();
+	
 	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
 
@@ -417,14 +421,14 @@ as_destroy(struct addrspace *as)
 
 	// Follow VM locking order to avoid another process trying to evict pages
 	// from the addrspace we are destroying.
-	lock_acquire_coremap();
+	spinlock_acquire_coremap();
 	lock_acquire(as->pages_lock);
 
 	// TODO(aabo): bigfork fails.
 	destroy_page_table(as->pages0, 0);
 	lock_release(as->pages_lock);
 	KASSERT(validate_coremap() == 0);
-	lock_release_coremap();
+	spinlock_release_coremap();
 
 	lock_destroy(as->pages_lock);
 	KASSERT(!lock_do_i_hold(as->heap_lock));
@@ -782,13 +786,13 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 {
 	struct pte *pte;
 
-	lock_acquire_coremap();
+	spinlock_acquire_coremap();
 	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, vaddr);
 	if (pte == NULL) {
 		// Silently ignores non-existent pages.
 		lock_release(as->pages_lock);
-		lock_release_coremap();
+		spinlock_release_coremap();
 		return;
 	}
 	if (pte->status & VM_PTE_VALID) {
@@ -801,5 +805,5 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 	pte->block_index = 0;
 	pte->paddr = (paddr_t)NULL;
 	lock_release(as->pages_lock);
-	lock_release_coremap();
+	spinlock_release_coremap();
 }

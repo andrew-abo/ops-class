@@ -182,6 +182,7 @@ void
 lock_acquire(struct lock *lock)
 {
 	KASSERT(lock != NULL);
+	// No sleeping allowed if we are called from an interrupt handler.
 	KASSERT(curthread->t_in_interrupt == false);
 
 	spinlock_acquire(&lock->lk_spinlock);
