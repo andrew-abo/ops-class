@@ -174,15 +174,15 @@ copy_page_table(struct addrspace *dst,
 				// Follow VM locking order when potentially evicting.
 				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
-				// Modify coremap and page table together atomically.		
-				spinlock_acquire_coremap();
-				lock_acquire(dst->pages_lock);
-				lock_acquire(src->pages_lock);
 				paddr = alloc_pages(1);
 				if (paddr == 0) {
-					spinlock_release_coremap();
+					lock_acquire(src->pages_lock);
+					lock_acquire(dst->pages_lock);
 					return ENOMEM;
 				}
+				lock_acquire(src->pages_lock);
+				lock_acquire(dst->pages_lock);
+				spinlock_acquire_coremap();
 				coremap_assign_vaddr(paddr, dst, vaddr);
 				dst_pte->paddr = paddr;
 				// Use direct addressing so we don't fault, which would cause
@@ -344,7 +344,6 @@ validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn)
 			if (pte->status & VM_PTE_VALID) {
                 KASSERT(vm_get_as(pte->paddr) == as);
                 KASSERT(vm_get_vaddr(pte->paddr) == vaddr);
-				//as_operation_is_valid(as, vaddr, -1 /*readable or writeable*/);
 			}
 			continue;
         }
@@ -421,12 +420,14 @@ as_destroy(struct addrspace *as)
 
 	// Follow VM locking order to avoid another process trying to evict pages
 	// from the addrspace we are destroying.
-	spinlock_acquire_coremap();
-	lock_acquire(as->pages_lock);
 
+	lock_acquire_evict();
+	lock_acquire(as->pages_lock);
 	// TODO(aabo): bigfork fails.
 	destroy_page_table(as->pages0, 0);
 	lock_release(as->pages_lock);
+
+	spinlock_acquire_coremap();
 	KASSERT(validate_coremap() == 0);
 	spinlock_release_coremap();
 
@@ -435,6 +436,7 @@ as_destroy(struct addrspace *as)
 	lock_destroy(as->heap_lock);
 	KASSERT(!as_in_coremap(as));
 	kfree(as);
+	lock_release_evict();
 }
 
 void
@@ -786,13 +788,11 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 {
 	struct pte *pte;
 
-	spinlock_acquire_coremap();
 	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, vaddr);
 	if (pte == NULL) {
 		// Silently ignores non-existent pages.
 		lock_release(as->pages_lock);
-		spinlock_release_coremap();
 		return;
 	}
 	if (pte->status & VM_PTE_VALID) {
@@ -805,5 +805,4 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 	pte->block_index = 0;
 	pte->paddr = (paddr_t)NULL;
 	lock_release(as->pages_lock);
-	spinlock_release_coremap();
 }

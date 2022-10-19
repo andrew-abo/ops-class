@@ -46,13 +46,12 @@ struct pte
 	KASSERT((pte->status == 0) && (pte->paddr == (paddr_t)NULL));	
     lock_release(as->pages_lock);
 
-    spinlock_acquire_coremap();
     paddr = alloc_pages(1);
     if (paddr == (paddr_t)NULL) {
-        spinlock_release_coremap();
         return NULL;
     }
     lock_acquire(as->pages_lock);
+    spinlock_acquire_coremap();
     coremap_assign_vaddr(paddr, as, vaddr);
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;

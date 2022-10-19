@@ -33,7 +33,6 @@ vmtest1(int nargs, char **args)
 
 	// Allocate all memory in blocks of uniform sizes.
 	for (block_size = 1; block_size < 16; block_size++) {
-        spinlock_acquire_coremap();
         for (i = 0; i < BLOCKS; i++) {
             paddr[i] = alloc_pages(block_size);
             if (paddr[i] == (paddr_t)NULL) {
@@ -41,14 +40,12 @@ vmtest1(int nargs, char **args)
                 break;
             }
         }
-		spinlock_release_coremap();
         used_bytes1 = coremap_used_bytes();
         KASSERT(used_bytes1 - used_bytes0 == (unsigned) i * block_size * PAGE_SIZE);
         i--;
         kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
         // Free in descending order.
-		spinlock_acquire_coremap();
         for (int j = i; j >= 0; j--) {
             free_pages(paddr[j]);
         }
@@ -57,7 +54,6 @@ vmtest1(int nargs, char **args)
 		paddr[0] = alloc_pages(1);
 		KASSERT(paddr[0] != (paddr_t)NULL);
 		free_pages(paddr[0]);
-		spinlock_release_coremap();
 
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
@@ -87,7 +83,6 @@ vmtest2(int nargs, char **args)
 
 	// Allocate all memory in blocks of uniform sizes.
 	for (block_size = 1; block_size < 16; block_size++) {
-		spinlock_acquire_coremap();
         for (i = 0; i < BLOCKS; i++) {
             paddr[i] = alloc_pages(block_size);
             if (paddr[i] == (paddr_t)NULL) {
@@ -95,14 +90,12 @@ vmtest2(int nargs, char **args)
                 break;
             }
         }
-		spinlock_release_coremap();
         used_bytes1 = coremap_used_bytes();
         KASSERT(used_bytes1 - used_bytes0 == (unsigned) i * block_size * PAGE_SIZE);
         i--;
         kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
         // Free in ascending order.
-		spinlock_acquire_coremap();
         for (int j = 0; j <= i; j++) {
             free_pages(paddr[j]);
         }
@@ -110,7 +103,6 @@ vmtest2(int nargs, char **args)
 		paddr[0] = alloc_pages(1);
 		KASSERT(paddr[0] != (paddr_t)NULL);
 		free_pages(paddr[0]);
-		spinlock_release_coremap();
 
         KASSERT(coremap_used_bytes() == used_bytes0);
     }
@@ -141,7 +133,6 @@ vmtest3(int nargs, char **args)
 
     // Allocate all memory in blocks of random sizes up to 32.
     my_used_pages = 0;
-	spinlock_acquire_coremap();
     for (i = 0; i < BLOCKS; i++) {
 		block_size = random() % 32 + 1;
 		paddr[i] = alloc_pages(block_size);
@@ -150,14 +141,12 @@ vmtest3(int nargs, char **args)
 		}
 		my_used_pages += block_size;
 	}
-	spinlock_release_coremap();
 	used_bytes1 = coremap_used_bytes();
 	KASSERT(used_bytes1 - used_bytes0 == my_used_pages * PAGE_SIZE);
 	i--;
 	kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
 	// Free in descending order.
-	spinlock_acquire_coremap();
 	for (int j = i; j >= 0; j--) {
 		free_pages(paddr[j]);
     }
@@ -166,7 +155,6 @@ vmtest3(int nargs, char **args)
     paddr[0] = alloc_pages(1);
     KASSERT(paddr[0] != (paddr_t)NULL);
     free_pages(paddr[0]);
-	spinlock_release_coremap();
     
     KASSERT(coremap_used_bytes() == used_bytes0);
 	set_swap_enabled(swap_enabled);
@@ -196,7 +184,6 @@ vmtest4(int nargs, char **args)
 
     // Allocate all memory in blocks of random sizes up to 32.
     my_used_pages = 0;
-	spinlock_acquire_coremap();
     for (i = 0; i < BLOCKS; i++) {
 		block_size = random() % 32 + 1;
 		paddr[i] = alloc_pages(block_size);
@@ -205,14 +192,12 @@ vmtest4(int nargs, char **args)
 		}
 		my_used_pages += block_size;
 	}
-	spinlock_release_coremap();
 	used_bytes1 = coremap_used_bytes();
 	KASSERT(used_bytes1 - used_bytes0 == my_used_pages * PAGE_SIZE);
 	i--;
 	kprintf("last page allocated: paddr[%d] = 0x%08x\n", i, paddr[i]);
 
 	// Free in ascending order.
-	spinlock_acquire_coremap();
 	for (int j = 0; j <= i; j++) {
 		free_pages(paddr[j]);
     }
@@ -221,7 +206,6 @@ vmtest4(int nargs, char **args)
     paddr[0] = alloc_pages(1);
     KASSERT(paddr[0] != (paddr_t)NULL);
     free_pages(paddr[0]);
-	spinlock_release_coremap();
 
     KASSERT(coremap_used_bytes() == used_bytes0);
 	set_swap_enabled(swap_enabled);
@@ -235,32 +219,32 @@ vmtest4(int nargs, char **args)
 int
 vmtest5(int nargs, char **args)
 {
-	vaddr_t vaddr;
+	vaddr_t kvaddr;
 	paddr_t paddr;
 	int result;
 	unsigned i;
 	(void)nargs;
 	(void)args;
 
-	vaddr = alloc_kpages(1);
-	KASSERT(vaddr != 0);
-	paddr = KVADDR_TO_PADDR(vaddr);
+	kvaddr = alloc_kpages(1);
+	KASSERT(kvaddr != 0);
+	paddr = KVADDR_TO_PADDR(kvaddr);
 
 	// Fill page with known sequence of bytes.
 	for (i = 0; i < PAGE_SIZE; i++) {
-		*(unsigned char *)(vaddr + i) = i % 256;
+		*(unsigned char *)(kvaddr + i) = i % 256;
 	}
 	result = block_write(0, paddr);
 	KASSERT(result == 0);
-	bzero((void *)vaddr, PAGE_SIZE);
+	bzero((void *)kvaddr, PAGE_SIZE);
 	result = block_read(0, paddr);
 	KASSERT(result == 0);
 	
 	// Confirm known sequence read back.
 	for (i = 0; i < PAGE_SIZE; i++) {
-		KASSERT(*(unsigned char *)(vaddr + i) == (i % 256));
+		KASSERT(*(unsigned char *)(kvaddr + i) == (i % 256));
 	}
-	free_kpages(vaddr);
+	free_kpages(kvaddr);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm5");
@@ -299,9 +283,7 @@ vmtest6(int nargs, char **args)
 	result = swap_out(pte, /*dirty=*/1);
 	lock_release(as->pages_lock);
 	KASSERT(result == 0);
-	spinlock_acquire_coremap();
 	free_pages(paddr);
-	spinlock_release_coremap();
 	
 	// Zero out the old memory for good meeasure.
 	bzero((void *)vaddr, PAGE_SIZE);
@@ -440,6 +422,7 @@ vmtest9(int nargs, char **args)
 		}
 		// Write a unique test pattern to each page.
 		*(unsigned *)PADDR_TO_KVADDR(pte->paddr) = p;
+		// Maintain our own coremap so we can find vaddr from paddr.
 		core_idx = paddr_to_core_idx(pte->paddr);
 		core_idx_to_vaddr[core_idx] = vaddr;
 	}
@@ -449,29 +432,33 @@ vmtest9(int nargs, char **args)
 	set_swap_enabled(1);
 
 	// Evict a page.
-	spinlock_acquire_coremap();
-	result = evict_page(&core_idx);
+	result = evict_page(&paddr);
 	KASSERT(result == 0);
-	paddr = core_idx_to_paddr(core_idx);
 	kvaddr = PADDR_TO_KVADDR(paddr);
 
-	// Zero out the page in memory.
-	bzero((void *)kvaddr, PAGE_SIZE);
-
-	// Page-in from swapdisk.
-	vaddr = core_idx_to_vaddr[core_idx];
+	// Page should be zeroed out by eviction.
+	for (int i = 0; i < PAGE_SIZE; i++) {
+        KASSERT(((char *)kvaddr)[i] == 0);
+	}
 
 	lock_acquire(as->pages_lock);
+	core_idx = paddr_to_core_idx(paddr);
+	vaddr = core_idx_to_vaddr[core_idx];	
 	pte = as_lookup_pte(as, vaddr);
 	KASSERT(pte != NULL);
-	block_read(pte->block_index, paddr);
-	// Check unique test pattern has been restored.
-	KASSERT(*(unsigned *)kvaddr == vaddr / 0x1000);
-	free_pages(paddr);
+
+	// Page-in from swapdisk.
+	KASSERT(pte->status & VM_PTE_BACKED);
+	result = block_read(pte->block_index, paddr);
+	KASSERT(result == 0);
 	lock_release(as->pages_lock);
-	spinlock_release_coremap();
+
+	// Check unique test pattern has been restored.
+	p = *(unsigned *)PADDR_TO_KVADDR(paddr);
+	KASSERT(p == vaddr / 0x1000);
 
     as_destroy(as);
+	free_pages(paddr);
 	kfree(core_idx_to_vaddr);
 
 	kprintf_t("\n");

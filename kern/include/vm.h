@@ -96,12 +96,15 @@ void free_pages(vaddr_t vaddr);
 void vm_tlb_erase(void);
 unsigned paddr_to_core_idx(paddr_t paddr);
 paddr_t core_idx_to_paddr(unsigned p);
+paddr_t coremap_assign_to_kernel(unsigned p, unsigned npages);
 unsigned coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr);
 
 struct addrspace *vm_get_as(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);
 void spinlock_acquire_coremap(void);
 void spinlock_release_coremap(void);
+void lock_acquire_evict(void);
+void lock_release_evict(void);
 
 /*
  * Return amount of memory (in bytes) used by allocated coremap pages.  If
