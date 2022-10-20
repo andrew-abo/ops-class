@@ -625,7 +625,7 @@ find_victim_page()
 }
 
 /*
- * Swap out a page if needed.  Mark as invalid.
+ * Save page to disk if needed.
  *
  * Caller responsible for locking page table.
  * 
@@ -637,13 +637,12 @@ find_victim_page()
  *   0 on success else errno.
  */
 int
-swap_out(struct pte *pte, int dirty) {
+save_page(struct pte *pte, int dirty) {
 	unsigned block_index;
 	int result;
 
 	KASSERT(pte != NULL);
 
-	// Swap page out if needed.
 	if (!(pte->status & VM_PTE_BACKED)) {
         lock_acquire(swapmap_lock);
         result = bitmap_alloc(swapmap, &block_index);
@@ -660,8 +659,6 @@ swap_out(struct pte *pte, int dirty) {
         }
 	}
 	pte->status |= VM_PTE_BACKED;
-	pte->status &= ~VM_PTE_VALID;
-	pte->paddr = (paddr_t)NULL;
 	return 0;
 }
 
@@ -702,18 +699,16 @@ evict_page(paddr_t *paddr)
 	old_vaddr = coremap[p].vaddr;
 	old_as = coremap[p].as;
 	old_status = coremap[p].status;
-    // Assign page to kernel to avoid an eviction until caller assigns
-	// to a user addrspace.
-	*paddr = coremap_assign_to_kernel(p, 1);
 	if (!(old_status & VM_CORE_USED)) {
 		// New already free page (not actually an eviction).
+		// Allocate to kernel before releasing coremap to prevent
+		// another process from taking it.
+        *paddr = coremap_assign_to_kernel(p, 1);
 		used_bytes += PAGE_SIZE;
 	}
 	spinlock_release(&coremap_lock);
 
 	if (old_status & VM_CORE_USED) {
-        // Never evict a kernel page.
-        KASSERT(old_as != NULL);
         // We assume we are evicting exactly one page.
         KASSERT((old_status & VM_CORE_NPAGES) == 1);
 		// It's possible we are already holding the page table lock.
@@ -731,7 +726,13 @@ evict_page(paddr_t *paddr)
             vm_tlb_remove(old_vaddr);
 		}
         old_pte = as_lookup_pte(old_as, old_vaddr);
-        swap_out(old_pte, old_status & VM_CORE_DIRTY);
+        save_page(old_pte, old_status & VM_CORE_DIRTY);
+		// Modify coremap and page table together atomically.
+		spinlock_acquire(&coremap_lock);
+        *paddr = coremap_assign_to_kernel(p, 1);
+        old_pte->status &= ~VM_PTE_VALID;
+        old_pte->paddr = (paddr_t)NULL;
+		spinlock_release(&coremap_lock);
 		if (!old_as_already_locked) {
             lock_release(old_as->pages_lock);
 		}
@@ -878,6 +879,11 @@ alloc_pages(unsigned npages)
 
 	// MUST NOT HOLD ANY as->pages_lock WHEN CALLING.  
 	// Follow locking instructions at top of vm.c to avoid VM deadlocks.
+	struct addrspace *as;
+	as = proc_getas();
+	if (as != NULL) {
+		KASSERT(!lock_do_i_hold(as->pages_lock));
+	}
 	
 	spinlock_acquire(&coremap_lock);
 	p = get_ppages(npages);
@@ -1197,7 +1203,6 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	// Easy case: page is in memory, just update TLB.
 	if (pte->status & VM_PTE_VALID) {
         KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
-        pte->status |= VM_PTE_VALID;
         vm_tlb_insert(pte->paddr, faultaddress);
         lock_release(as->pages_lock);        
         return 0;

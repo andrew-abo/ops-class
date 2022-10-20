@@ -79,7 +79,7 @@ int block_read(unsigned block_index, paddr_t paddr);
 int get_page_via_table(struct addrspace *as, vaddr_t faultaddress);
 void free_swapmap_block(int block_index);
 size_t swap_used_pages(void);
-int swap_out(struct pte *pte, int dirty);
+int save_page(struct pte *pte, int dirty);
 
 /* Fault handling function called by trap code */
 int vm_fault(int faulttype, vaddr_t faultaddress);

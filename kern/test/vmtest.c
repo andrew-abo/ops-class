@@ -223,21 +223,27 @@ vmtest5(int nargs, char **args)
 	paddr_t paddr;
 	int result;
 	unsigned i;
+	struct pte pte;
 	(void)nargs;
 	(void)args;
 
 	kvaddr = alloc_kpages(1);
 	KASSERT(kvaddr != 0);
 	paddr = KVADDR_TO_PADDR(kvaddr);
+	pte.status = VM_PTE_VALID;
+	pte.block_index = 0;
+	pte.paddr = paddr;
 
 	// Fill page with known sequence of bytes.
 	for (i = 0; i < PAGE_SIZE; i++) {
 		*(unsigned char *)(kvaddr + i) = i % 256;
 	}
-	result = block_write(0, paddr);
+	result = save_page(&pte, 0);
+	KASSERT(result == 0);
+	result = block_write(pte.block_index, paddr);
 	KASSERT(result == 0);
 	bzero((void *)kvaddr, PAGE_SIZE);
-	result = block_read(0, paddr);
+	result = block_read(pte.block_index, paddr);
 	KASSERT(result == 0);
 	
 	// Confirm known sequence read back.
@@ -255,7 +261,7 @@ vmtest5(int nargs, char **args)
 int
 vmtest6(int nargs, char **args)
 {
-	vaddr_t vaddr;
+	vaddr_t kvaddr;
 	paddr_t paddr;
 	int result;
 	unsigned i;
@@ -272,30 +278,32 @@ vmtest6(int nargs, char **args)
     KASSERT(pte != NULL);
 
 	paddr = pte->paddr;
-	vaddr = PADDR_TO_KVADDR(paddr);
+	kvaddr = PADDR_TO_KVADDR(paddr);
 	// Fill page with known sequence of bytes.
 	for (i = 0; i < PAGE_SIZE; i++) {
-		*(unsigned char *)(vaddr + i) = i % 256;
+		*(unsigned char *)(kvaddr + i) = i % 256;
 	}
 
 	// Swap page out.
 	lock_acquire(as->pages_lock);
-	result = swap_out(pte, /*dirty=*/1);
+	result = save_page(pte, /*dirty=*/1);
+	pte->status = VM_PTE_BACKED;
+	pte->paddr = 0;
 	lock_release(as->pages_lock);
 	KASSERT(result == 0);
 	free_pages(paddr);
 	
 	// Zero out the old memory for good meeasure.
-	bzero((void *)vaddr, PAGE_SIZE);
+	bzero((void *)kvaddr, PAGE_SIZE);
 
 	// Access the backed page via page table.
 	result = get_page_via_table(as, faultaddress);
 	KASSERT(result == 0);
-	vaddr = PADDR_TO_KVADDR(pte->paddr);
+	kvaddr = PADDR_TO_KVADDR(pte->paddr);
 
 	// Confirm known sequence read back.
 	for (i = 0; i < PAGE_SIZE; i++) {
-		KASSERT(*(unsigned char *)(vaddr + i) == (i % 256));
+		KASSERT(*(unsigned char *)(kvaddr + i) == (i % 256));
 	}
     as_destroy(as);
 

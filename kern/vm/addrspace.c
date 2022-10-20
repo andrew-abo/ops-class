@@ -105,10 +105,7 @@ copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
 	if (result) {
 		return result;
 	}
-	// dst page is in memory, but not backed and is dirty
-	// => swap_out will allocate a new swap block and write page.
-	dst_pte->status = VM_PTE_VALID;
-    return swap_out(dst_pte, /*dirty=*/1);
+    return save_page(dst_pte, /*dirty=*/1);
 }
 
 /*
@@ -171,17 +168,15 @@ copy_page_table(struct addrspace *dst,
 				// Use direct addressing so we don't fault here.
 				memmove(page_buf, 
 				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
-				// Follow VM locking order when potentially evicting.
+				// Follow VM locking order when requesting memory.
 				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
 				paddr = alloc_pages(1);
-				if (paddr == 0) {
-					lock_acquire(src->pages_lock);
-					lock_acquire(dst->pages_lock);
-					return ENOMEM;
-				}
 				lock_acquire(src->pages_lock);
 				lock_acquire(dst->pages_lock);
+				if (paddr == 0) {
+					return ENOMEM;
+				}
 				spinlock_acquire_coremap();
 				coremap_assign_vaddr(paddr, dst, vaddr);
 				dst_pte->paddr = paddr;
@@ -261,6 +256,7 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	
 	spinlock_acquire_coremap();
 	KASSERT(as_validate_page_table(dst) == 0);
+	KASSERT(validate_coremap() == 0);
 	spinlock_release_coremap();
 	
 	lock_release(dst->pages_lock);
