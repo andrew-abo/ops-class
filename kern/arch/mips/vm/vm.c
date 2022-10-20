@@ -879,11 +879,6 @@ alloc_pages(unsigned npages)
 
 	// MUST NOT HOLD ANY as->pages_lock WHEN CALLING.  
 	// Follow locking instructions at top of vm.c to avoid VM deadlocks.
-	struct addrspace *as;
-	as = proc_getas();
-	if (as != NULL) {
-		KASSERT(!lock_do_i_hold(as->pages_lock));
-	}
 	
 	spinlock_acquire(&coremap_lock);
 	p = get_ppages(npages);
