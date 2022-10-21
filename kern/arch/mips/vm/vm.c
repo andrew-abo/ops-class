@@ -56,7 +56,13 @@ static struct spinlock coremap_lock;
 // a foreign process' page table.  To avoid a deadlock, we require this
 // locking order:
 //
-// 0. Release all page table locks whenever requesting memory.
+// 0. Release all page table locks before any operation that may trigger 
+//    an eviction:
+//    * Requesting memory
+//    * Touching user memory (which could be swapped out and require
+//      an eviction to swap in).
+//    * NOTE: Touching kernel memory won't trigger evictions because it
+//      is never swapped out.
 // 1. Lock evict_lock (sleep lock)
 // 2. Lock as->pages_lock (sleep lock)
 // 3. Lock coremap (spinlock)
@@ -683,9 +689,21 @@ evict_page(paddr_t *paddr)
 	int p;
 	int old_as_already_locked;
 
+	// DO NOT HOLD any as->pages_lock while blocking on evict_lock, which
+	// will cause a deadlock if the evicting process (holding evict_lock)
+	// needs to access your as->pages_lock.
+	struct addrspace *as;
+	as = proc_getas();
+	if  (as != NULL) {
+		KASSERT(!lock_do_i_hold(as->pages_lock));
+	}
+
 	// There can be at most one process at a time performing an eviction
 	// to avoid a deadlock.  evict_lock must be acquired anytime we touch
-	// another process' pages.
+	// another process' pages.  We don't use coremap_lock to gate eviction
+	// because it is a spinlock which means we can't sleep while waiting
+	// for other locks such as as->pages_lock.  (We can't make coremap
+	// a sleep lock because it needs to be accessed in interrupt handlers--kfree).	
 	lock_acquire(evict_lock);
 
 	spinlock_acquire(&coremap_lock);
@@ -705,7 +723,8 @@ evict_page(paddr_t *paddr)
 		// another process from taking it.
         *paddr = coremap_assign_to_kernel(p, 1);
 		used_bytes += PAGE_SIZE;
-	}
+	} // Else if page is not free, then it cannot be evicted behind
+	// our back because we hold evict_lock.
 	spinlock_release(&coremap_lock);
 
 	if (old_status & VM_CORE_USED) {
@@ -876,9 +895,6 @@ alloc_pages(unsigned npages)
 	paddr_t paddr;
 	vaddr_t kvaddr;
 	int result;
-
-	// MUST NOT HOLD ANY as->pages_lock WHEN CALLING.  
-	// Follow locking instructions at top of vm.c to avoid VM deadlocks.
 	
 	spinlock_acquire(&coremap_lock);
 	p = get_ppages(npages);
@@ -1226,8 +1242,7 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	coremap_assign_vaddr(paddr, as, faultaddress);
     pte->paddr = paddr;
     pte->status |= VM_PTE_VALID;        
-    KASSERT(validate_coremap() == 0);
-    KASSERT(as_validate_page_table(as) == 0);
+
     vm_tlb_insert(pte->paddr, faultaddress);
     spinlock_release(&coremap_lock);
     lock_release(as->pages_lock);

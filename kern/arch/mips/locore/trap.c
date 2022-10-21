@@ -272,10 +272,10 @@ mips_trap(struct trapframe *tf)
 		 */
 		 switch (result) {
          case ENOMEM:
-         kprintf("User mode out of memory.\n");
+         kprintf("mips_trap: vm_fault returned ENOMEM in user mode.\n");
          break;
          case EFAULT:
-         kprintf("User mode Segmentation fault.\n");
+         kprintf("mips_trap: vm_fault returned EFAULT in user mode.\n");
         }
         kill_curthread(tf->tf_epc, code, tf->tf_vaddr);
 		goto done;

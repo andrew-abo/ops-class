@@ -94,9 +94,10 @@ as_create(void)
 static int
 copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
 {
-
 	int result;
 
+	// Don't want to be touching user memory here which may trigger an eviction.
+	KASSERT((vaddr_t) page_buf >= MIPS_KSEG0);
     KASSERT(src_pte->status & VM_PTE_BACKED);
 	// Effect a copy to disk by loading dst with src contents,
 	// then swapping out dst.
@@ -105,7 +106,10 @@ copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
 	if (result) {
 		return result;
 	}
-    return save_page(dst_pte, /*dirty=*/1);
+    result = save_page(dst_pte, /*dirty=*/1);
+	dst_pte->paddr = (paddr_t)NULL;
+	dst_pte->status &= ~VM_PTE_VALID;
+	return result;
 }
 
 /*
@@ -153,24 +157,22 @@ copy_page_table(struct addrspace *dst,
 		if (level == PT_LEVELS - 1) {
 			// Make copy of physical page.
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
+			// Release src page table for possible eviction.
+			lock_release(src->pages_lock);
 			dst_pte = as_touch_pte(dst, vaddr);
+			lock_acquire(src->pages_lock);
 			if (dst_pte == NULL) {
 				return ENOMEM;
 			}
 			src_pte = ((struct pte *)src_pages) + idx;
 			KASSERT(src_pte != NULL);
 			if (src_pte->status & VM_PTE_VALID) {
-				// Copy memory to memory.
-				// First copy from user space to kernel while we know src page
-				// is in memory:
-				// 1) Ensures it won't get evicted.
-				// 2) Avoid potential vm faults when copying back to user space.
-				// Use direct addressing so we don't fault here.
-				memmove(page_buf, 
-				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
-				// Follow VM locking order when requesting memory.
+				// Release locks before touching user memory.
 				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
+				// Copy from user memory to kernel memory so we control trigger evictions.
+				memmove(page_buf, 
+				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
 				paddr = alloc_pages(1);
 				lock_acquire(src->pages_lock);
 				lock_acquire(dst->pages_lock);
@@ -180,11 +182,9 @@ copy_page_table(struct addrspace *dst,
 				spinlock_acquire_coremap();
 				coremap_assign_vaddr(paddr, dst, vaddr);
 				dst_pte->paddr = paddr;
-				// Use direct addressing so we don't fault, which would cause
-				// deadlock when accessing the page table we already have locked.
+				// Copy kernel memory to kernel memory so no danger of evictions.
                 memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
                   (const void *)page_buf, PAGE_SIZE);
-				//spinlock_release_coremap();
 				dst_pte->status = VM_PTE_VALID;
 				spinlock_release_coremap();
 			} else if (src_pte->status & VM_PTE_BACKED) {
@@ -246,19 +246,7 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 
 	lock_acquire(src->pages_lock);
 	lock_acquire(dst->pages_lock);
-	
-	// TODO(aabo): bigfork fails here.
-	spinlock_acquire_coremap();
-	KASSERT(as_validate_page_table(src) == 0);
-	spinlock_release_coremap();
-	
 	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0, page_buf);
-	
-	spinlock_acquire_coremap();
-	KASSERT(as_validate_page_table(dst) == 0);
-	KASSERT(validate_coremap() == 0);
-	spinlock_release_coremap();
-	
 	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
 
@@ -419,18 +407,11 @@ as_destroy(struct addrspace *as)
 
 	lock_acquire_evict();
 	lock_acquire(as->pages_lock);
-	// TODO(aabo): bigfork fails.
 	destroy_page_table(as->pages0, 0);
 	lock_release(as->pages_lock);
-
-	spinlock_acquire_coremap();
-	KASSERT(validate_coremap() == 0);
-	spinlock_release_coremap();
-
 	lock_destroy(as->pages_lock);
 	KASSERT(!lock_do_i_hold(as->heap_lock));
 	lock_destroy(as->heap_lock);
-	KASSERT(!as_in_coremap(as));
 	kfree(as);
 	lock_release_evict();
 }
@@ -679,8 +660,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
 				return 0;
 			}
 			// Allocate and install next level page table.
-			// Release our own page table when asking for memory in case
-			// system needs to evict one of our pages.
+			// See VM locking order at top of vm.c.
 			lock_release(as->pages_lock);
             next_pages = kmalloc(sizeof(void *) * (1 << VPN_BITS_PER_LEVEL));
 			lock_acquire(as->pages_lock);
@@ -701,8 +681,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
             // vaddr not found.
             return 0;
         }
-        // Release our own page table when asking for memory in case
-        // system needs to evict one of our pages.
+        // Release page table before potential eviction.
         lock_release(as->pages_lock);
         leaf_pages = kmalloc(sizeof(struct pte) * (1 << VPN_BITS_PER_LEVEL));
         lock_acquire(as->pages_lock);

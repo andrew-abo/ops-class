@@ -471,3 +471,5 @@ optfile   synchprobs  test/synchprobs.c
 
 defoption automationtest
 optfile automationtest	test/automationtest.c
+
+options hangman
