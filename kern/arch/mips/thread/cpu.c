@@ -293,7 +293,7 @@ void
 cpu_idle(void)
 {
 	wait();
-        cpu_irqonoff();
+    cpu_irqonoff();
 }
 
 /*
@@ -302,8 +302,8 @@ cpu_idle(void)
 void
 cpu_halt(void)
 {
-        cpu_irqoff();
-        while (1) {
+    cpu_irqoff();
+    while (1) {
 		wait();
-        }
+    }
 }

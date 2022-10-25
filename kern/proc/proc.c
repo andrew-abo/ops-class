@@ -149,13 +149,13 @@ proc_create(const char *name)
 /*
  * De-allocate everything except fields needed for waitpid.
  *
- * Used in making a process a zombie.
+ * Prepare to transition process to zombie, but don't change p_state yet.
  *
  * Args:
- *   proc: Pointer to process to make a zombie.
+ *   proc: Pointer to process to prepare to be zombie.
  */
 void
-proc_zombify(struct proc *proc)
+proc_pre_zombie(struct proc *proc)
 {
 	/*
 	 * You probably want to destroy and null out much of the
@@ -169,12 +169,6 @@ proc_zombify(struct proc *proc)
 	KASSERT(proc != kproc);
 
 	spinlock_acquire(&proc->p_lock);
-	if (proc->p_state == S_ZOMBIE) {
-		spinlock_release(&proc->p_lock);
-		return;
-	}
-	proc->p_state = S_ZOMBIE;
-	spinlock_release(&proc->p_lock);
 
 	/* VFS fields */
 	if (proc->p_cwd) {
@@ -222,12 +216,13 @@ proc_zombify(struct proc *proc)
 		if (proc == curproc) {
 			as = proc_setas(NULL);
 			as_deactivate();
-		}
-		else {
+		} else {
 			as = proc->p_addrspace;
 			proc->p_addrspace = NULL;
 		}
+		spinlock_release(&proc->p_lock);
 		as_destroy(as);
+		spinlock_acquire(&proc->p_lock);
 	}
 	if (proc->p_cwd_lock) {
         lock_destroy(proc->p_cwd_lock);
@@ -237,6 +232,8 @@ proc_zombify(struct proc *proc)
 		lock_destroy(proc->files_lock);
 		proc->files_lock = NULL;
 	}
+
+	spinlock_release(&proc->p_lock);
 }
 
 /*
@@ -252,7 +249,9 @@ proc_zombify(struct proc *proc)
 void
 proc_destroy(struct proc *proc)
 {
-    proc_zombify(proc);
+	// In case proc did not exit on its own, we may need to
+	// de-allocate proc member data structures.
+    proc_pre_zombie(proc);
 	if (proc->waitpid_lock) {
         lock_destroy(proc->waitpid_lock);
 	}
