@@ -146,7 +146,7 @@ sys_exit_common(unsigned exit_status)
             // sys_close() refers to curproc global, which
             // requires thread to still be attached to this
             // process, so this must be done before proc_remthread().
-            sys_close(fd, 0);
+            sys_close(fd, /*lock_fd_table=*/0);
         }
     }
     lock_release(proc->files_lock);
@@ -154,16 +154,15 @@ sys_exit_common(unsigned exit_status)
     proc_remthread(curthread);
     proc_pre_zombie(proc);
 
+    lock_acquire(proc->waitpid_lock);
+    cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
     spinlock_acquire(&proc->p_lock);
-	if (proc->p_numthreads == 0) {
-        lock_acquire(proc->waitpid_lock);
-        cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
-        lock_release(proc->waitpid_lock);
-        // Change p_state to zombie only after all accesses to proc
-        // are complete, which signals parent it is ok to destroy.
-        proc->p_state = S_ZOMBIE;
-	}
-	spinlock_release(&proc->p_lock);
+    // Change p_state to zombie only after all accesses to proc
+    // are complete, which signals parent it is ok to destroy.
+    proc->p_state = S_ZOMBIE;
+    spinlock_release(&proc->p_lock);
+    // Release control to parent (if cv_waiting).
+    lock_release(proc->waitpid_lock);
 
     thread_exit();
 }

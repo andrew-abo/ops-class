@@ -44,6 +44,7 @@
 #include <uio.h>
 #include <vfs.h>
 #include <vm.h>
+#include <synch.h>
 
 // At boot coremap is disabled until it has been initialized.
 static int coremap_enabled = 0;
@@ -94,6 +95,9 @@ static struct vnode *swapdisk_vn;
 static struct lock *swapdisk_lock;
 static size_t swapdisk_pages;
 static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
+
+// Communicates when tlbshootdowns are completed by interrupted cpus.
+static struct semaphore *tlbshootdown_sem;
 
 /*
  * Wrap ram_stealmem in a spinlock.
@@ -505,6 +509,12 @@ vm_bootstrap(void)
 		panic("vm_bootstrap: Cannot create swapdisklock.");
 	}
 	kprintf("Total swapdisk pages %u\n", swapdisk_pages);
+
+	tlbshootdown_sem = sem_create("tlbshootdown", 0);
+	if (tlbshootdown_sem == NULL) {
+		panic("thread_bootstrap: Could not create tlbshootdown_sem");
+	}
+
 }
 
 /*
@@ -742,6 +752,7 @@ evict_page(paddr_t *paddr)
         // Deactivate page so it is not accessed during page out.
 		shootdown.as = old_as;
         shootdown.vaddr = old_vaddr;
+		shootdown.sem = tlbshootdown_sem;
 		ipi_broadcast_tlbshootdown(&shootdown);
 		vm_tlb_remove(old_vaddr);
         old_pte = as_lookup_pte(old_as, old_vaddr);
@@ -1022,7 +1033,6 @@ free_pages(paddr_t paddr)
 	unsigned next;
 	unsigned prev;
 	vaddr_t vaddr;
-	struct tlbshootdown shootdown;
 
 	KASSERT((paddr >= firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
@@ -1033,10 +1043,7 @@ free_pages(paddr_t paddr)
 	KASSERT(coremap[p].status & VM_CORE_USED);
 	npages = get_core_npages(p);
 	vaddr = coremap[p].vaddr;
-	shootdown.as = proc_getas();
 	for (unsigned i = 0; i < npages; i++) {
-		shootdown.vaddr = vaddr;
-		ipi_broadcast_tlbshootdown(&shootdown);
         vm_tlb_remove(vaddr);
 		vaddr += PAGE_SIZE;
 	}
@@ -1104,6 +1111,7 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 	if (proc_getas() == ts->as) {
 		vm_tlb_remove(ts->vaddr);
 	}
+	V(ts->sem);
 }
 
 /*

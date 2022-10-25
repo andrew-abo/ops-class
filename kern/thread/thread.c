@@ -1198,13 +1198,20 @@ void
 ipi_broadcast_tlbshootdown(const struct tlbshootdown *mapping)
 {
 	unsigned i;
+	unsigned num_shootdowns = 0;
 	struct cpu *c;
 
 	for (i=0; i < cpuarray_num(&allcpus); i++) {
 		c = cpuarray_get(&allcpus, i);
 		if (c != curcpu->c_self) {
+			// TODO(aabo): Only shootdown the cpus we need to.
 			ipi_tlbshootdown(c, mapping);
+			num_shootdowns++;
 		}
+	}
+	// Block until all cpus have finished their shootdowns.
+	for (i = 0; i < num_shootdowns; i++) {
+		P(mapping->sem);
 	}
 }
 

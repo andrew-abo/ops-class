@@ -31,6 +31,7 @@
 #define _MIPS_VM_H_
 
 #include <types.h>
+#include <synch.h>
 
 /*
  * Machine-dependent VM system definitions.
@@ -118,9 +119,11 @@ paddr_t ram_getfirstfree(void);
  * We'll take up to 16 invalidations before just flushing the whole TLB.
  */
 
+// A TLB shootdown request.
 struct tlbshootdown {
     struct addrspace *as;
 	vaddr_t vaddr;
+    struct semaphore *sem;  // Communicates when CPUs finish shootdowns.
 };
 
 #define TLBSHOOTDOWN_MAX 16
