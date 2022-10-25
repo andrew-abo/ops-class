@@ -151,7 +151,20 @@ sys_exit_common(unsigned exit_status)
     }
     lock_release(proc->files_lock);
 
-    proc_zombify(proc);
+    proc_remthread(curthread);
+    proc_pre_zombie(proc);
+
+    spinlock_acquire(&proc->p_lock);
+	if (proc->p_numthreads == 0) {
+        lock_acquire(proc->waitpid_lock);
+        cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
+        lock_release(proc->waitpid_lock);
+        // Change p_state to zombie only after all accesses to proc
+        // are complete, which signals parent it is ok to destroy.
+        proc->p_state = S_ZOMBIE;
+	}
+	spinlock_release(&proc->p_lock);
+
     thread_exit();
 }
 
@@ -237,6 +250,9 @@ int sys_waitpid(pid_t pid, userptr_t status, int options)
     // TODO(aabo): Looking through the linked list above and here is
     // inefficient.  A doubly-linked list would eliminate need for two lookups.
     proclist_remove(pid);
+
+    // Child exit call must be guaranteed to be done with all accesses
+    // to its proc struct before we destroy it.
     proc_destroy(child);
     if (status != NULL) {
         result = copyout(&child_status, status, sizeof(int));

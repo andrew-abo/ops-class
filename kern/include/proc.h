@@ -106,7 +106,7 @@ struct proc *proc_create(const char *name);
 struct proc *proc_create_runprogram(const char *name);
 
 /* De-allocate everything except fields needed for waitpid */
-void proc_zombify(struct proc *proc);
+void proc_pre_zombie(struct proc *proc);
 
 /* Destroy a process. */
 void proc_destroy(struct proc *proc);

@@ -688,6 +688,7 @@ evict_page(paddr_t *paddr)
 	int old_status;
 	int p;
 	int old_as_already_locked;
+	struct tlbshootdown shootdown;
 
 	// DO NOT HOLD any as->pages_lock while blocking on evict_lock, which
 	// will cause a deadlock if the evicting process (holding evict_lock)
@@ -739,11 +740,10 @@ evict_page(paddr_t *paddr)
             lock_acquire(old_as->pages_lock);
 		}
         // Deactivate page so it is not accessed during page out.
-        // TODO(aabo): call tlb_shootdown for multi-CPU case.
-		//ipi_broadcast_tlbshootdown(mapping);
-		if (proc_getas() == old_as) {
-            vm_tlb_remove(old_vaddr);
-		}
+		shootdown.as = old_as;
+        shootdown.vaddr = old_vaddr;
+		ipi_broadcast_tlbshootdown(&shootdown);
+		vm_tlb_remove(old_vaddr);
         old_pte = as_lookup_pte(old_as, old_vaddr);
         save_page(old_pte, old_status & VM_CORE_DIRTY);
 		// Modify coremap and page table together atomically.
@@ -1001,7 +1001,7 @@ alloc_kpages(unsigned npages)
 void
 free_kpages(vaddr_t vaddr)
 {
-	paddr_t paddr;	//TODO(aabo): I added this assert. Why?
+	paddr_t paddr;
 
 	if (coremap_enabled) {
         KASSERT((vaddr & PAGE_FRAME) == vaddr);
@@ -1022,6 +1022,7 @@ free_pages(paddr_t paddr)
 	unsigned next;
 	unsigned prev;
 	vaddr_t vaddr;
+	struct tlbshootdown shootdown;
 
 	KASSERT((paddr >= firstpaddr) && (paddr < lastpaddr));
 	p = paddr_to_core_idx(paddr);
@@ -1032,7 +1033,10 @@ free_pages(paddr_t paddr)
 	KASSERT(coremap[p].status & VM_CORE_USED);
 	npages = get_core_npages(p);
 	vaddr = coremap[p].vaddr;
+	shootdown.as = proc_getas();
 	for (unsigned i = 0; i < npages; i++) {
+		shootdown.vaddr = vaddr;
+		ipi_broadcast_tlbshootdown(&shootdown);
         vm_tlb_remove(vaddr);
 		vaddr += PAGE_SIZE;
 	}
@@ -1091,13 +1095,15 @@ coremap_used_bytes() {
 	return 0;
 }
 
+/*
+ * Handles interprocess interrupt for a TLB shootdown request.
+ */
 void
 vm_tlbshootdown(const struct tlbshootdown *ts)
 {
-	(void)ts;
-	// TODO(aabo): Implement what each CPU should do when
-	// it recieves an ipi for shootdown.
-	panic("vm_tlbshootdown not implemented.\n");
+	if (proc_getas() == ts->as) {
+		vm_tlb_remove(ts->vaddr);
+	}
 }
 
 /*
@@ -1282,6 +1288,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// behave unexpectedly.
 
 	// TLB faults should only occur in KUSEG.
+	if (faultaddress >= MIPS_KSEG0) {
+		panic("vm_fault: faultaddress = 0x%08x\n", faultaddress);
+	}
 	KASSERT(faultaddress < MIPS_KSEG0);
 	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 

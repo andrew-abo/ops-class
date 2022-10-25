@@ -803,11 +803,8 @@ thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
 void
 thread_exit(void)
 {
-    struct proc *proc;
 	struct thread *cur;
 
-    // curproc becomes NULL once we call proc_remthread, so save it.
-	proc = curproc;
 	cur = curthread;
 
 	if (cur->t_proc != NULL) {
@@ -830,11 +827,6 @@ thread_exit(void)
 
 	/* Interrupts off on this processor */
 	splhigh();
-	if (proc->p_numthreads == 0) {
-        lock_acquire(proc->waitpid_lock);
-        cv_broadcast(proc->waitpid_cv, proc->waitpid_lock);
-        lock_release(proc->waitpid_lock);
-	}
 	thread_switch(S_ZOMBIE, NULL, NULL);
 	panic("braaaaaaaiiiiiiiiiiinssssss\n");
 }
