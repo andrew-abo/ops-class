@@ -96,7 +96,7 @@ static struct lock *swapdisk_lock;
 static size_t swapdisk_pages;
 static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
 
-// Communicates when tlbshootdowns are completed by interrupted cpus.
+// Tracks when TLB shootdowns complete.
 static struct semaphore *tlbshootdown_sem;
 
 /*
@@ -512,9 +512,8 @@ vm_bootstrap(void)
 
 	tlbshootdown_sem = sem_create("tlbshootdown", 0);
 	if (tlbshootdown_sem == NULL) {
-		panic("thread_bootstrap: Could not create tlbshootdown_sem");
-	}
-
+        panic("vm_bootstrap: Could not create tlbshootdown_sem");
+    }
 }
 
 /*
@@ -540,13 +539,19 @@ block_read(unsigned block_index, paddr_t paddr)
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	KASSERT(swapdisk_pages > 0);
 	KASSERT(block_index < swapdisk_pages);
+
+	lock_acquire(swapmap_lock);
+	KASSERT(bitmap_isset(swapmap, block_index));
+	lock_release(swapmap_lock);
+
 	offset = block_index * PAGE_SIZE;
 	buf = (void *)PADDR_TO_KVADDR(paddr);
 	uio_kinit(&iov, &my_uio, buf, PAGE_SIZE, offset, UIO_READ);
+
 	lock_acquire(swapdisk_lock);
-	KASSERT(bitmap_isset(swapmap, block_index));
 	result = VOP_READ(swapdisk_vn, &my_uio);
 	lock_release(swapdisk_lock);
+
 	return (result || (my_uio.uio_resid != 0));
 }
 
@@ -573,13 +578,19 @@ block_write(unsigned block_index, paddr_t paddr)
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	KASSERT(swapdisk_pages > 0);
 	KASSERT(block_index < swapdisk_pages);
+
+	lock_acquire(swapmap_lock);
+	KASSERT(bitmap_isset(swapmap, block_index));
+	lock_release(swapmap_lock);
+
 	offset = block_index * PAGE_SIZE;
 	buf = (void *)PADDR_TO_KVADDR(paddr);
 	uio_kinit(&iov, &my_uio, buf, PAGE_SIZE, offset, UIO_WRITE);
+
 	lock_acquire(swapdisk_lock);
-	KASSERT(bitmap_isset(swapmap, block_index));
 	result = VOP_WRITE(swapdisk_vn, &my_uio);
 	lock_release(swapdisk_lock);
+
 	return (result || (my_uio.uio_resid != 0));
 }
 
@@ -750,13 +761,17 @@ evict_page(paddr_t *paddr)
             lock_acquire(old_as->pages_lock);
 		}
         // Deactivate page so it is not accessed during page out.
+        // Once removed from TLB, any page faults will block
+		// waiting for old_as->pages_lock until we are done.
 		shootdown.as = old_as;
         shootdown.vaddr = old_vaddr;
 		shootdown.sem = tlbshootdown_sem;
 		ipi_broadcast_tlbshootdown(&shootdown);
 		vm_tlb_remove(old_vaddr);
         old_pte = as_lookup_pte(old_as, old_vaddr);
-        save_page(old_pte, old_status & VM_CORE_DIRTY);
+		// TODO(aabo): remove
+        //save_page(old_pte, old_status & VM_CORE_DIRTY);
+        save_page(old_pte, 1);
 		// Modify coremap and page table together atomically.
 		spinlock_acquire(&coremap_lock);
         *paddr = coremap_assign_to_kernel(p, 1);
@@ -1108,10 +1123,10 @@ coremap_used_bytes() {
 void
 vm_tlbshootdown(const struct tlbshootdown *ts)
 {
-	if (proc_getas() == ts->as) {
-		vm_tlb_remove(ts->vaddr);
-	}
-	V(ts->sem);
+    // TODO(aabo): check proc_getas() == ts->as but this seems
+	// to cause a deadlock.
+	vm_tlb_remove(ts->vaddr);
+	V(tlbshootdown_sem);
 }
 
 /*
@@ -1256,7 +1271,6 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	coremap_assign_vaddr(paddr, as, faultaddress);
     pte->paddr = paddr;
     pte->status |= VM_PTE_VALID;        
-
     vm_tlb_insert(pte->paddr, faultaddress);
     spinlock_release(&coremap_lock);
     lock_release(as->pages_lock);
@@ -1297,9 +1311,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	// TLB faults should only occur in KUSEG.
 	if (faultaddress >= MIPS_KSEG0) {
-		panic("vm_fault: faultaddress = 0x%08x\n", faultaddress);
+		panic("vm_fault: faultaddress = 0x%08x is not in KUSEG.\n", 
+		  faultaddress);
 	}
-	KASSERT(faultaddress < MIPS_KSEG0);
 	DEBUG(DB_VM, "vm_fault: fault: 0x%x\n", faultaddress);
 
 	switch (faulttype) {
