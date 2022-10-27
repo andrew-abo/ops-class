@@ -702,14 +702,13 @@ int
 evict_page(paddr_t *paddr)
 {
 	// "old" refers to page to be evicted.
-	vaddr_t old_vaddr;
+	struct core_page old_core;
 	paddr_t kvaddr;
-	struct addrspace *old_as;
 	struct pte *old_pte;
-	int old_status;
 	int p;
 	int old_as_already_locked;
 	struct tlbshootdown shootdown;
+	int result;
 
 	// DO NOT HOLD any as->pages_lock while blocking on evict_lock, which
 	// will cause a deadlock if the evicting process (holding evict_lock)
@@ -736,10 +735,8 @@ evict_page(paddr_t *paddr)
 		lock_release(evict_lock);
 		return ENOMEM;
 	}
-	old_vaddr = coremap[p].vaddr;
-	old_as = coremap[p].as;
-	old_status = coremap[p].status;
-	if (!(old_status & VM_CORE_USED)) {
+	old_core = coremap[p];
+	if (!(old_core.status & VM_CORE_USED)) {
 		// New already free page (not actually an eviction).
 		// Allocate to kernel before releasing coremap to prevent
 		// another process from taking it.
@@ -749,29 +746,35 @@ evict_page(paddr_t *paddr)
 	// our back because we hold evict_lock.
 	spinlock_release(&coremap_lock);
 
-	if (old_status & VM_CORE_USED) {
+	if (old_core.status & VM_CORE_USED) {
         // We assume we are evicting exactly one page.
-        KASSERT((old_status & VM_CORE_NPAGES) == 1);
+        KASSERT((old_core.status & VM_CORE_NPAGES) == 1);
 		// It's possible we are already holding the page table lock.
 		// For example, if evicting from our own process, or
 		// as_copy where we hold two page tables one which is not our own.
 		// If so, don't re-lock.
-		old_as_already_locked = lock_do_i_hold(old_as->pages_lock);
+		old_as_already_locked = lock_do_i_hold(old_core.as->pages_lock);
 		if (!old_as_already_locked) {
-            lock_acquire(old_as->pages_lock);
+            lock_acquire(old_core.as->pages_lock);
 		}
         // Deactivate page so it is not accessed during page out.
         // Once removed from TLB, any page faults will block
 		// waiting for old_as->pages_lock until we are done.
-		shootdown.as = old_as;
-        shootdown.vaddr = old_vaddr;
+		shootdown.as = old_core.as;
+        shootdown.vaddr = old_core.vaddr;
 		shootdown.sem = tlbshootdown_sem;
 		ipi_broadcast_tlbshootdown(&shootdown);
-		vm_tlb_remove(old_vaddr);
-        old_pte = as_lookup_pte(old_as, old_vaddr);
+		vm_tlb_remove(old_core.vaddr);
+        old_pte = as_lookup_pte(old_core.as, old_core.vaddr);
 		// TODO(aabo): remove
-        //save_page(old_pte, old_status & VM_CORE_DIRTY);
-        save_page(old_pte, 1);
+        //result = save_page(old_pte, old_core.status & VM_CORE_DIRTY);
+        result = save_page(old_pte, 1);
+		if (result) {
+            if (!old_as_already_locked) {
+                lock_acquire(old_core.as->pages_lock);
+            }
+			return result;
+		}
 		// Modify coremap and page table together atomically.
 		spinlock_acquire(&coremap_lock);
         *paddr = coremap_assign_to_kernel(p, 1);
@@ -779,7 +782,7 @@ evict_page(paddr_t *paddr)
         old_pte->paddr = (paddr_t)NULL;
 		spinlock_release(&coremap_lock);
 		if (!old_as_already_locked) {
-            lock_release(old_as->pages_lock);
+            lock_release(old_core.as->pages_lock);
 		}
 	}
 	kvaddr = PADDR_TO_KVADDR(*paddr);
