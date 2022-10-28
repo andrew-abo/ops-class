@@ -766,12 +766,16 @@ evict_page(paddr_t *paddr)
 		ipi_broadcast_tlbshootdown(&shootdown);
 		vm_tlb_remove(old_core.vaddr);
         old_pte = as_lookup_pte(old_core.as, old_core.vaddr);
-		// TODO(aabo): remove
-        //result = save_page(old_pte, old_core.status & VM_CORE_DIRTY);
-        result = save_page(old_pte, 1);
+		// Refresh page dirty status in case page was accessed since we 
+		// last checked.  Page can no longer be accessed since we 
+		// cleared the TLB and locked the page table.
+		spinlock_acquire(&coremap_lock);
+		old_core = coremap[p];
+		spinlock_release(&coremap_lock);
+        result = save_page(old_pte, old_core.status & VM_CORE_DIRTY);
 		if (result) {
             if (!old_as_already_locked) {
-                lock_acquire(old_core.as->pages_lock);
+                lock_release(old_core.as->pages_lock);
             }
 			return result;
 		}
@@ -1186,7 +1190,7 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();
 	ehi = vaddr & PAGE_FRAME;
-	elo = (paddr) | TLBLO_VALID;
+	elo = paddr | TLBLO_VALID;
 	KASSERT(elo & TLBLO_VALID);
 	DEBUG(DB_VM, "vm_tlb_insert: 0x%x -> 0x%x\n", vaddr, paddr);
 	// Check if vaddr already in TLB so we don't duplicate.
