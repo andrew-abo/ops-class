@@ -10,3 +10,7 @@ build
 /root/
 *.swo
 *.swp
+.vscode/configurationCache.log
+.vscode/dryrun.log
+.vscode/settings.json
+.vscode/targets.log

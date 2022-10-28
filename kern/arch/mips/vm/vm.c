@@ -57,9 +57,9 @@ static struct spinlock coremap_lock;
 // a foreign process' page table.  To avoid a deadlock, we require this
 // locking order:
 //
-// 0. Release all page table locks before any operation that may trigger 
-//    an eviction:
-//    * Requesting memory
+// 0. Release all VM locks (coremap_lock/pages_lock) before any operation
+// that may trigger an eviction:
+//    * Requesting memory (kmalloc, alloc_pages, alloc_kpages)
 //    * Touching user memory (which could be swapped out and require
 //      an eviction to swap in).
 //    * NOTE: Touching kernel memory won't trigger evictions because it
@@ -710,7 +710,7 @@ evict_page(paddr_t *paddr)
 	struct tlbshootdown shootdown;
 	int result;
 
-	// DO NOT HOLD any as->pages_lock while blocking on evict_lock, which
+	// DO NOT HOLD any VM locks while blocking on evict_lock, which
 	// will cause a deadlock if the evicting process (holding evict_lock)
 	// needs to access your as->pages_lock.
 	struct addrspace *as;
@@ -718,6 +718,7 @@ evict_page(paddr_t *paddr)
 	if  (as != NULL) {
 		KASSERT(!lock_do_i_hold(as->pages_lock));
 	}
+	KASSERT(!spinlock_do_i_hold(&coremap_lock));
 
 	// There can be at most one process at a time performing an eviction
 	// to avoid a deadlock.  evict_lock must be acquired anytime we touch
@@ -1196,10 +1197,10 @@ vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
 	// Check if vaddr already in TLB so we don't duplicate.
 	idx = tlb_probe(ehi, 0);
 	if (idx < 0) {
-        tlb_random(ehi, elo);
-	} else {
-		tlb_write(ehi, elo, idx);
+        // Don't use tlb_random() because it can't access all NUM_TLB entries.
+		idx = random() % NUM_TLB;
 	}
+	tlb_write(ehi, elo, idx);
 	splx(spl);
 }
 
