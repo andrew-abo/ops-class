@@ -472,4 +472,8 @@ optfile   synchprobs  test/synchprobs.c
 defoption automationtest
 optfile automationtest	test/automationtest.c
 
-options hangman
+# Optional performance counters for virtual memory.
+defoption vm_perf
+
+options hangman 
+options vm_perf

@@ -39,6 +39,7 @@
 #include <machine/vm.h>
 #include <types.h>
 #include <addrspace.h>
+#include "opt-vm_perf.h"
 
 /* Fault-type arguments to vm_fault() */
 #define VM_FAULT_READ        0    /* A read was attempted */
@@ -116,5 +117,14 @@ unsigned int coremap_used_bytes(void);
 /* TLB shootdown handling called from interprocessor_interrupt */
 void vm_tlbshootdown(const struct tlbshootdown *);
 
+#if OPT_VM_PERF
+void reset_vm_perf(void);
+void count_tlb_fault(void);
+void count_swap_in(void);
+void count_swap_out(void);
+void count_fault(void);
+void count_eviction(void);
+void dump_vm_perf(void);
+#endif
 
 #endif /* _VM_H_ */

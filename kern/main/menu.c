@@ -44,10 +44,12 @@
 #include <syscall.h>
 #include <test.h>
 #include <prompt.h>
+#include <vm.h>
 #include "opt-sfs.h"
 #include "opt-net.h"
 #include "opt-synchprobs.h"
 #include "opt-automationtest.h"
+#include "opt-vm_perf.h"
 
 /*
  * In-kernel menu and command dispatcher.
@@ -521,6 +523,32 @@ cmd_kheapdump(int nargs, char **args)
 	return 0;
 }
 
+#if OPT_VM_PERF
+static
+int
+cmd_vmstats(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+
+	dump_vm_perf();
+
+	return 0;
+}
+
+static
+int
+cmd_reset_vmstats(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+
+	reset_vm_perf();
+
+	return 0;
+}
+#endif
+
 ////////////////////////////////////////
 //
 // Menus.
@@ -703,6 +731,10 @@ static const char *mainmenu[] = {
 	"[khu] Kernel heap usage             ",
 	"[khgen] Next kernel heap generation ",
 	"[khdump] Dump kernel heap           ",
+#if OPT_VM_PERF
+    "[vm] Virtual memory stats           ",
+	"[vr] Reset virtual memory stats     ",
+#endif
 	"[q] Quit and shut down              ",
 	NULL
 };
@@ -758,6 +790,10 @@ static struct {
 	{ "khu",        cmd_kheapused },
 	{ "khgen",      cmd_kheapgeneration },
 	{ "khdump",     cmd_kheapdump },
+#if OPT_VM_PERF
+    { "vm",         cmd_vmstats },
+	{ "vr",         cmd_reset_vmstats },
+#endif
 
 	/* base system tests */
 	{ "at",		arraytest },

@@ -45,6 +45,7 @@
 #include <vfs.h>
 #include <vm.h>
 #include <synch.h>
+#include "opt-vm_perf.h"
 
 // At boot coremap is disabled until it has been initialized.
 static int coremap_enabled = 0;
@@ -98,6 +99,71 @@ static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
 
 // Tracks when TLB shootdowns complete.
 static struct semaphore *tlbshootdown_sem;
+
+#if OPT_VM_PERF
+static unsigned tlb_faults = 0;
+static unsigned swap_ins = 0;
+static unsigned swap_outs = 0;
+static unsigned faults = 0;
+static unsigned evictions = 0;
+
+static struct spinlock vm_perf_lock;
+
+static void init_vm_perf() {
+	spinlock_init(&vm_perf_lock);
+	reset_vm_perf();
+}
+
+void reset_vm_perf() {
+    spinlock_acquire(&vm_perf_lock);
+	tlb_faults = 0;
+	swap_ins = 0;
+	swap_outs = 0;
+	faults = 0;
+	evictions = 0;
+	spinlock_release(&vm_perf_lock);
+}
+
+void count_tlb_fault() { 
+	spinlock_acquire(&vm_perf_lock);
+	tlb_faults++;
+	spinlock_release(&vm_perf_lock);
+}
+
+void count_swap_in() {
+	spinlock_acquire(&vm_perf_lock);
+	swap_ins++;
+	spinlock_release(&vm_perf_lock);
+}
+
+void count_swap_out() {
+	spinlock_acquire(&vm_perf_lock);
+	swap_outs++;
+	spinlock_release(&vm_perf_lock);
+}
+
+void count_fault() {
+	spinlock_acquire(&vm_perf_lock);
+	faults++;
+	spinlock_release(&vm_perf_lock);
+}
+
+void count_eviction() {
+	spinlock_acquire(&vm_perf_lock);
+	evictions++;
+	spinlock_release(&vm_perf_lock);
+}
+
+void dump_vm_perf() {
+	spinlock_acquire(&vm_perf_lock);
+	kprintf("tlb_faults = %8d\n", tlb_faults);
+	kprintf("swap_ins   = %8d\n", swap_ins);
+	kprintf("swap_outs  = %8d\n", swap_outs);
+	kprintf("evictions  = %8d\n", evictions);
+	kprintf("faults     = %8d\n", faults);
+	spinlock_release(&vm_perf_lock);
+}
+#endif
 
 /*
  * Wrap ram_stealmem in a spinlock.
@@ -514,6 +580,9 @@ vm_bootstrap(void)
 	if (tlbshootdown_sem == NULL) {
         panic("vm_bootstrap: Could not create tlbshootdown_sem");
     }
+#if OPT_VM_PERF
+    init_vm_perf();
+#endif
 }
 
 /*
@@ -680,6 +749,9 @@ save_page(struct pte *pte, int dirty) {
         pte->block_index = block_index;
 	}
 	if (dirty || !(pte->status & VM_PTE_BACKED)) {
+#if OPT_VM_PERF
+        count_swap_out();
+#endif
         result = block_write(pte->block_index, pte->paddr);
         if (result) {
             return ENOSPC;
@@ -748,6 +820,9 @@ evict_page(paddr_t *paddr)
 	spinlock_release(&coremap_lock);
 
 	if (old_core.status & VM_CORE_USED) {
+#if OPT_VM_PERF
+        count_eviction();
+#endif
         // We assume we are evicting exactly one page.
         KASSERT((old_core.status & VM_CORE_NPAGES) == 1);
 		// It's possible we are already holding the page table lock.
@@ -1242,6 +1317,10 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	struct pte *pte;
 	int result;
 
+#if OPT_VM_PERF
+    count_fault();
+#endif
+
 	lock_acquire(as->pages_lock);	
 	pte = as_touch_pte(as, faultaddress);
 	if (pte == NULL) {
@@ -1252,7 +1331,10 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	if (pte->status & VM_PTE_VALID) {
         KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
         vm_tlb_insert(pte->paddr, faultaddress);
-        lock_release(as->pages_lock);        
+        lock_release(as->pages_lock);
+#if OPT_VM_PERF
+        count_tlb_fault();
+#endif		
         return 0;
 	}
 	// Following VM locking order to avoid a deadlock.
@@ -1268,6 +1350,9 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
     if (pte->status & VM_PTE_BACKED) {
         KASSERT(swap_enabled);
         result = block_read(pte->block_index, paddr);
+#if OPT_VM_PERF
+        count_swap_in();
+#endif
         if (result) {
             free_pages(paddr);
             lock_release(as->pages_lock);
