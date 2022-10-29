@@ -9,6 +9,10 @@ depends: [not-dumbvm-vm, /syscalls/forktest.t]
 sys161:
   cpus: 4
   ram: 8M
+monitor:
+  progresstimeout: 40.0
+  commandtimeout: 3000.0
+  window: 40  
 ---
 khu
 $ /testbin/bigfork

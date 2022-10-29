@@ -764,8 +764,8 @@ evict_page(paddr_t *paddr)
 		shootdown.as = old_core.as;
         shootdown.vaddr = old_core.vaddr;
 		shootdown.sem = tlbshootdown_sem;
-		ipi_broadcast_tlbshootdown(&shootdown);
 		vm_tlb_remove(old_core.vaddr);
+		ipi_broadcast_tlbshootdown(&shootdown);
         old_pte = as_lookup_pte(old_core.as, old_core.vaddr);
 		// Refresh page dirty status in case page was accessed since we 
 		// last checked.  Page can no longer be accessed since we 
@@ -1134,7 +1134,7 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
     // TODO(aabo): check proc_getas() == ts->as but this seems
 	// to cause a deadlock.
 	vm_tlb_remove(ts->vaddr);
-	V(tlbshootdown_sem);
+	V(ts->sem);
 }
 
 /*

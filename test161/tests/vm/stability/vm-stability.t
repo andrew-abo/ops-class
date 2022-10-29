@@ -7,6 +7,10 @@ depends: [/vm/bigfork.t, /vm/parallelvm.t, /vm/quintmat.t, /vm/zero.t, /vm/sort.
 sys161:
   ram: 10M
   cpus: 4
+monitor:
+  progresstimeout: 40.0
+  commandtimeout: 3000.0
+  window: 40  
 ---
 khu
 $ /testbin/forktest
