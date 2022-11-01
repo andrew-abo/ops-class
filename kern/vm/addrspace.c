@@ -170,7 +170,7 @@ copy_page_table(struct addrspace *dst,
 				// Release locks before touching user memory.
 				lock_release(src->pages_lock);
 				lock_release(dst->pages_lock);
-				// Copy from user memory to kernel memory so we control trigger evictions.
+				// Copy from user memory to kernel memory so we don't trigger evictions.
 				memmove(page_buf, 
 				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
 				paddr = alloc_pages(1);

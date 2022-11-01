@@ -673,8 +673,47 @@ block_write(unsigned block_index, paddr_t paddr)
  * Caller is responsible for locking coremap.
  *
  * Returns:
- *   coremap index of freed page, else 0 if no pages available.
+ *   coremap index of page to evict, else 0 if no evictable pages.
  */
+
+#define EVICT_CLOCK 0
+#if EVICT_CLOCK
+// CLOCK page replacement index into coremap.
+static unsigned next_evict = 0;
+
+// CLOCK page replacement policy.
+// Sweeps through coremap and takes first page that has not been
+// accessed since last sweep.  Or takes next_evict index if all
+// have been accessed.  Note MIPS does not have hardware marking
+// of accessed pages, so kernel cannot see TLB hit statistics.
+// Thus, a page with one TLB miss will get "accessed" but a
+// page with many TLB hits does not register any accesses.
+static unsigned
+find_victim_page()
+{
+    unsigned p;  // Page index into coremap.
+	unsigned block_pages;
+
+    KASSERT(spinlock_do_i_hold(&coremap_lock));
+
+    // CLOCK replacement policy.
+	p = next_evict; 
+	while ((coremap[p].as == NULL) || 
+	      ((coremap[p].status & VM_CORE_ACCESSED) &&
+	       (coremap[p].status & VM_CORE_USED))) {
+        coremap[p].status &= ~VM_CORE_ACCESSED;
+		block_pages = get_core_npages(p);
+		p = (p + block_pages) % page_max;
+	}
+	KASSERT(coremap[p].as != NULL);
+	block_pages = get_core_npages(p);
+	next_evict = (p + block_pages) % page_max;
+	return p;
+}
+#endif
+
+#define EVICT_RANDOM 1
+#if EVICT_RANDOM
 static unsigned
 find_victim_page()
 {
@@ -719,6 +758,8 @@ find_victim_page()
 	}
 	panic("find_victim_page: failed to find victim page.");
 }
+#endif
+
 
 /*
  * Save page to disk if needed.
@@ -907,7 +948,7 @@ get_ppages(unsigned npages)
 }
 
 /*
- * Assign coremap page for paddr to addrrspace as, vaddr.
+ * Assign coremap page for paddr to addrspace as, vaddr.
  *
  * Caller is responsible for locking coremap.
  * 
@@ -1294,6 +1335,15 @@ locking_find_victim_page()
 	return paddr;
 }
 
+static void
+touch_paddr(paddr_t paddr) {
+	unsigned p;
+
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
+	p = paddr_to_core_idx(paddr);
+	coremap[p].status |= VM_CORE_ACCESSED;
+}
+
 /*
  * Retrieve page containing faultaddress.
  *
@@ -1331,6 +1381,9 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	if (pte->status & VM_PTE_VALID) {
         KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
         vm_tlb_insert(pte->paddr, faultaddress);
+		spinlock_acquire(&coremap_lock);
+		touch_paddr(pte->paddr);
+		spinlock_release(&coremap_lock);
         lock_release(as->pages_lock);
 #if OPT_VM_PERF
         count_tlb_fault();
@@ -1363,7 +1416,8 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	spinlock_acquire(&coremap_lock);
 	coremap_assign_vaddr(paddr, as, faultaddress);
     pte->paddr = paddr;
-    pte->status |= VM_PTE_VALID;        
+	touch_paddr(paddr);
+    pte->status |= VM_PTE_VALID;
     vm_tlb_insert(pte->paddr, faultaddress);
     spinlock_release(&coremap_lock);
     lock_release(as->pages_lock);
