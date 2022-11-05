@@ -79,37 +79,47 @@ as_create(void)
 }
 
 /*
- * Copies swapped out page src_pte to swapped out page dst_pte.
- *
- * Caller is responsible for locking src and dst addrspaces.
- * 
- * Args:
- *   dst_pte: Desintation page table entry.
- *   src_pte: Source page table entry.
- *   page_buf: Pointer to scratch buffer at least PAGE_SIZE bytes.
- * 
- * Returns:
- *   0 on success, else errno.
+ * Lazy copy page references not actual page data.
  */
-static int
-copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
+int
+lazy_copy_page(struct pte *dst_pte, struct addrspace *src, struct pte *src_pte)
 {
-	int result;
+    ref_count_t *ref_count;
+	struct spinlock *ref_count_lock;
 
-	// Don't want to be touching user memory here which may trigger an eviction.
-	KASSERT((vaddr_t) page_buf >= MIPS_KSEG0);
-    KASSERT(src_pte->status & VM_PTE_BACKED);
-	// Effect a copy to disk by loading dst with src contents,
-	// then swapping out dst.
-	dst_pte->paddr = KVADDR_TO_PADDR((vaddr_t)page_buf);
-	result = block_read(src_pte->block_index, dst_pte->paddr);
-	if (result) {
-		return result;
-	}
-    result = save_page(dst_pte, /*dirty=*/1);
-	dst_pte->paddr = (paddr_t)NULL;
-	dst_pte->status &= ~VM_PTE_VALID;
-	return result;
+	KASSERT(lock_do_i_hold(src->pages_lock));
+
+	// TODO(aabo): this is not sufficient.  if the original page is evicted, then
+	// the copy paddr is stale.  Coremap only points to the original addrspace.
+	// Need to share entire pte so copies stay in sync with original?
+	// as->copy = NULL if this is not a copy, else points to original pte.
+	// replaces ref_count pointer.
+    dst_pte->status = src_pte->status;
+    dst_pte->paddr = src_pte->paddr;
+    dst_pte->block_index = src_pte->block_index;
+    if (src_pte->ref_count_lock == NULL) {
+        lock_release(src->pages_lock);
+        ref_count = kmalloc(sizeof(ref_count_t));
+        if (ref_count == NULL) {
+            return ENOMEM;
+        }
+        ref_count_lock = kmalloc(sizeof(struct spinlock));
+        if (ref_count_lock == NULL) {
+            kfree(ref_count);
+            return ENOMEM;
+        }
+		spinlock_init(ref_count_lock);
+        lock_acquire(src->pages_lock);
+		*ref_count = 1;
+        src_pte->ref_count = ref_count;
+		src_pte->ref_count_lock = ref_count_lock;
+    }
+    spinlock_acquire(src_pte->ref_count_lock);
+    (*src_pte->ref_count)++;
+    dst_pte->ref_count = src_pte->ref_count;
+    dst_pte->ref_count_lock = src_pte->ref_count_lock;
+    spinlock_release(src_pte->ref_count_lock);
+	return 0;
 }
 
 /*
@@ -128,7 +138,6 @@ copy_swap_page(struct pte *dst_pte, struct pte *src_pte, char *page_buf)
  *   dst: Pointer to destination address space.
  *   src_pages: Pointer to source address space level0 page table.
  *   vpn: initial virtual page number (normally 0).
- *   page_buf: Pointer to a scratch buffer at least PAGE_SIZE bytes.
  * 
  * Returns:
  *   0 on success, else errno.
@@ -138,14 +147,12 @@ copy_page_table(struct addrspace *dst,
                 struct addrspace *src,
 				void **src_pages, 
 				int level, 
-				vaddr_t vpn, 
-				char *page_buf) 
+				vaddr_t vpn) 
 {
 	struct pte *dst_pte, *src_pte;
 	vaddr_t vaddr, next_vpn;
 	void **next_pages;
 	int result;
-	paddr_t paddr;
 
 	KASSERT(lock_do_i_hold(src->pages_lock));
 	KASSERT(lock_do_i_hold(dst->pages_lock));
@@ -155,7 +162,6 @@ copy_page_table(struct addrspace *dst,
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
 		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
 		if (level == PT_LEVELS - 1) {
-			// Make copy of physical page.
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
 			// Release src page table for possible eviction.
 			lock_release(src->pages_lock);
@@ -166,42 +172,19 @@ copy_page_table(struct addrspace *dst,
 			}
 			src_pte = ((struct pte *)src_pages) + idx;
 			KASSERT(src_pte != NULL);
-			if (src_pte->status & VM_PTE_VALID) {
-				// Release locks before touching user memory.
-				lock_release(src->pages_lock);
-				lock_release(dst->pages_lock);
-				// Copy from user memory to kernel memory so we don't trigger evictions.
-				memmove(page_buf, 
-				  (const void *)PADDR_TO_KVADDR(src_pte->paddr), PAGE_SIZE);
-				paddr = alloc_pages(1);
-				lock_acquire(src->pages_lock);
-				lock_acquire(dst->pages_lock);
-				if (paddr == 0) {
-					return ENOMEM;
-				}
-				spinlock_acquire_coremap();
-				coremap_assign_vaddr(paddr, dst, vaddr);
-				dst_pte->paddr = paddr;
-				// Copy kernel memory to kernel memory so no danger of evictions.
-                memmove((void *)PADDR_TO_KVADDR(dst_pte->paddr), 
-                  (const void *)page_buf, PAGE_SIZE);
-				dst_pte->status = VM_PTE_VALID;
-				spinlock_release_coremap();
-			} else if (src_pte->status & VM_PTE_BACKED) {
-				// Copy swap to swap.
-				result = copy_swap_page(dst_pte, src_pte, page_buf);
-				if (result) {
-					return result;
-				}
-				dst_pte->status = VM_PTE_BACKED;
-			} // else page does not have any data.
+			result = lazy_copy_page(dst_pte, src, src_pte);
+			if (result) {
+				return result;
+			}
+			// Reactivate write detection.
+			vm_tlb_remove(vaddr);			
 			continue;
         }
 		next_pages = src_pages[idx];
         if (next_pages == NULL) {
 			continue;
 		}		
-		result = copy_page_table(dst, src, next_pages, next_level, next_vpn, page_buf);
+		result = copy_page_table(dst, src, next_pages, next_level, next_vpn);
 		if (result) {
 			return result;
 		}
@@ -213,7 +196,6 @@ int
 as_copy(struct addrspace *src, struct addrspace **ret)
 {
 	struct addrspace *dst;
-	char *page_buf;
 	int result;
 
 	*ret = NULL;
@@ -221,8 +203,6 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	if (dst == NULL) {
 		return ENOMEM;
 	}
-
-	// TODO(aabo): Implement deferred copy on write.
 
 	for (int s = 0; s < src->next_segment; s++) {
 		dst->segments[s].vbase = src->segments[s].vbase;
@@ -236,21 +216,12 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 	dst->vheaptop = src->vheaptop;
 	lock_release(src->heap_lock);
 
-	// Scratch memory for copying swap pages if needed.
-	// Allocate once here per process for efficiency.
-	page_buf = kmalloc(sizeof(char) * PAGE_SIZE);
-	if (page_buf == NULL) {
-		as_destroy(dst);
-		return ENOMEM;
-	}
-
 	lock_acquire(src->pages_lock);
 	lock_acquire(dst->pages_lock);
-	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0, page_buf);
+	result = copy_page_table(dst, src, src->pages0, 0, (vaddr_t)0x0);
 	lock_release(dst->pages_lock);
 	lock_release(src->pages_lock);
 
-	kfree(page_buf);
 	if (result) {
 		as_destroy(dst);
 		return result;
@@ -375,6 +346,18 @@ destroy_page_table(void **pages, int level)
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
 		if (level == PT_LEVELS - 1) {
 			pte = ((struct pte *)pages) + idx;
+			if (pte->ref_count_lock != NULL) {
+                spinlock_acquire(pte->ref_count_lock);
+                if (*pte->ref_count == 1) {
+                    spinlock_release(pte->ref_count_lock);
+                    kfree(pte->ref_count);
+                    kfree(pte->ref_count_lock);
+                } else {
+                    (*pte->ref_count)--;
+                    spinlock_release(pte->ref_count_lock);
+					continue;
+                }
+			}
 			if (pte->status & VM_PTE_VALID) {
                 free_pages(pte->paddr);
             }
@@ -694,6 +677,8 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
             leaf_pages[idx].status = 0;
             leaf_pages[idx].block_index = 0;
             leaf_pages[idx].paddr = (paddr_t)NULL;
+			leaf_pages[idx].ref_count = NULL;
+			leaf_pages[idx].ref_count_lock = NULL;
         }
     }
 	level++;
@@ -770,12 +755,30 @@ as_destroy_page(struct addrspace *as, vaddr_t vaddr)
 		lock_release(as->pages_lock);
 		return;
 	}
+	if (pte->ref_count_lock != NULL) {
+        spinlock_acquire(pte->ref_count_lock);
+        if (*pte->ref_count == 1) {
+            spinlock_release(pte->ref_count_lock);
+            kfree(pte->ref_count);
+            kfree(pte->ref_count_lock);
+			pte->ref_count = NULL;
+			pte->ref_count_lock = NULL;
+        } else {
+            (*pte->ref_count)--;
+            spinlock_release(pte->ref_count_lock);
+	        pte->status = 0;
+	        pte->block_index = 0;
+	        pte->paddr = (paddr_t)NULL;
+	        lock_release(as->pages_lock);
+			return;
+        }
+	}
 	if (pte->status & VM_PTE_VALID) {
         free_pages(pte->paddr);
 	}
 	if (pte->status & VM_PTE_BACKED) {
         free_swapmap_block(pte->block_index);
-    }
+	}
 	pte->status = 0;
 	pte->block_index = 0;
 	pte->paddr = (paddr_t)NULL;

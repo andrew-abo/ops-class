@@ -13,7 +13,6 @@
 #include <kern/test161.h>
 #include <vm.h>
 
-
 /*
  * Only for directed testing purposes.
  *
@@ -425,11 +424,12 @@ addrspacetest11(int nargs, char **args)
     struct addrspace *src, *dst;
     struct pte *src_pte, *dst_pte;
     vaddr_t vaddr;
-    int i;
+    vaddr_t src_kvaddr, dst_kvaddr;
+    unsigned i, j;
     int result;
 	size_t swap0, swap1;
 	size_t mem0, mem1;
-	const int test_pages = 512;
+	const unsigned test_pages = 64;
 
     kprintf("Starting as11 test...\n");
 
@@ -439,7 +439,6 @@ addrspacetest11(int nargs, char **args)
     src = as_create();
     KASSERT(src != NULL);
 
-    // Exhaust user memory.
     kprintf("Create pages\n");
     for (i = 0; i < test_pages; i++) {
 		if (i % 64 == 0) {
@@ -448,7 +447,12 @@ addrspacetest11(int nargs, char **args)
 		kprintf(".");
         vaddr = i * PAGE_SIZE;
         src_pte = create_test_page(src, vaddr);
+        if (src_pte == NULL) {
+            break;
+        }
         KASSERT(src_pte != NULL);
+        src_kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
+        *(unsigned *)src_kvaddr = i;
     }
     kprintf("\n");
 
@@ -459,12 +463,12 @@ addrspacetest11(int nargs, char **args)
     lock_acquire(src->pages_lock);
     lock_acquire(dst->pages_lock);
     kprintf("Check page tables\n");
-    for (i = 0; i < test_pages; i++) {
-		if (i % 64 == 0) {
+    for (j = 0; j < i; j++) {
+		if (j % 64 == 0) {
 			kprintf("\n");
 		}
 		kprintf(".");
-        vaddr = i * PAGE_SIZE;
+        vaddr = j * PAGE_SIZE;
         src_pte = as_lookup_pte(src, vaddr);
         KASSERT(src_pte != NULL);
         dst_pte = as_lookup_pte(dst, vaddr);
@@ -473,9 +477,12 @@ addrspacetest11(int nargs, char **args)
         // and see if page faults retrieve the correct contents
         // either from memory or swap.  But, since this is a 
         // kernel test, there is no active addrspace, so we
-        // can't test end-to-end access of virtual addresses.
-        // We can only do some sanity checking that the data
-        // structures exist.
+        // can't test vm_fault logic.
+        // We can check direct mapped addresses have matching data.
+        src_kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
+        dst_kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
+        KASSERT(*(unsigned *)dst_kvaddr == j);
+        KASSERT(*(unsigned *)src_kvaddr == *(unsigned *)dst_kvaddr);
     }
     lock_release(src->pages_lock);
     lock_release(dst->pages_lock);
@@ -490,5 +497,145 @@ addrspacetest11(int nargs, char **args)
 	KASSERT(mem0 == mem1);
 
 	success(TEST161_SUCCESS, SECRET, "as11");
+	return 0;
+}
+
+// Test lazy_copy_page copies one pte correctly.
+int
+addrspacetest12(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *src, *dst;
+    struct pte *src_pte;
+    struct pte *dst_pte;
+    vaddr_t vaddr = 0x1000;
+    vaddr_t kvaddr;
+    int result;
+	size_t swap0, swap1;
+	size_t mem0, mem1;
+    const uint32_t testdata = 0xfade1234;
+
+    kprintf("Starting as12 test...\n");
+	mem0 = coremap_used_bytes();
+	swap0 = swap_used_pages();
+
+    src = as_create();
+    KASSERT(src != NULL);
+    dst = as_create();
+    KASSERT(dst != NULL);
+
+    src_pte = create_test_page(src, vaddr);
+    KASSERT(src_pte != NULL);
+    lock_acquire(dst->pages_lock);
+    dst_pte = as_touch_pte(dst, vaddr);
+    KASSERT(dst_pte != NULL);
+    lock_release(dst->pages_lock);
+
+    // Write some test data.
+    kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
+    *(uint32_t *)kvaddr = testdata;
+
+    lock_acquire(src->pages_lock);
+    result = lazy_copy_page(dst_pte, src, src_pte);
+    KASSERT(result == 0);
+
+    // Check if copy matches source.
+    src_pte = as_lookup_pte(src, vaddr);
+    KASSERT(src_pte != NULL);
+    lock_acquire(dst->pages_lock);
+    KASSERT(src_pte->paddr == dst_pte->paddr);
+    KASSERT(src_pte->status == dst_pte->status);
+    KASSERT(src_pte->block_index == dst_pte->block_index);
+    KASSERT(src_pte->ref_count == dst_pte->ref_count);
+    KASSERT(src_pte->ref_count_lock == dst_pte->ref_count_lock);
+    kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
+    KASSERT(*(uint32_t *)kvaddr == testdata);
+    spinlock_acquire(dst_pte->ref_count_lock);
+    KASSERT(*dst_pte->ref_count == 2);
+    spinlock_release(dst_pte->ref_count_lock);
+    lock_release(src->pages_lock);
+    lock_release(dst->pages_lock);
+
+    as_destroy(src);
+    as_destroy(dst);
+
+	// Verify memory and swap have been cleaned up.
+	mem1 = coremap_used_bytes();
+	swap1 = swap_used_pages();
+	KASSERT(swap0 == swap1);
+	KASSERT(mem0 == mem1);
+
+	success(TEST161_SUCCESS, SECRET, "as12");
+	return 0;
+}
+
+// Test restore_page creates a full page copy.
+int
+addrspacetest13(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+    struct addrspace *src, *dst;
+    struct pte *src_pte;
+    struct pte *dst_pte;
+    vaddr_t vaddr = 0x1000;
+    vaddr_t kvaddr;
+    int result;
+	size_t swap0, swap1;
+	size_t mem0, mem1;
+    const uint32_t testdata = 0xfade1234;
+
+    kprintf("Starting as13 test...\n");
+	mem0 = coremap_used_bytes();
+	swap0 = swap_used_pages();
+
+    src = as_create();
+    KASSERT(src != NULL);
+    dst = as_create();
+    KASSERT(dst != NULL);
+
+    src_pte = create_test_page(src, vaddr);
+    KASSERT(src_pte != NULL);
+    lock_acquire(dst->pages_lock);
+    dst_pte = as_touch_pte(dst, vaddr);
+    KASSERT(dst_pte != NULL);
+    lock_release(dst->pages_lock);
+
+    // Write some test data.
+    kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
+    *(uint32_t *)kvaddr = testdata;
+
+    lock_acquire(src->pages_lock);
+    result = lazy_copy_page(dst_pte, src, src_pte);
+    KASSERT(result == 0);
+    lock_release(src->pages_lock);
+    
+    result = restore_page(dst, dst_pte, vaddr);
+    KASSERT(result == 0);
+
+    // Simulate detaching page from original.
+    spinlock_acquire(dst_pte->ref_count_lock);
+    (*dst_pte->ref_count)--;
+    spinlock_release(dst_pte->ref_count_lock);
+    dst_pte->ref_count = NULL;
+    dst_pte->ref_count_lock = NULL;
+    KASSERT(*src_pte->ref_count == 1);
+
+    // Confirm we have created a new phyiscal page with matching contents.
+    KASSERT(src_pte->paddr != dst_pte->paddr);
+    kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
+    KASSERT(*(uint32_t *)kvaddr == testdata);
+
+    as_destroy(src);
+    as_destroy(dst);
+
+	// Verify memory and swap have been cleaned up.
+	mem1 = coremap_used_bytes();
+	swap1 = swap_used_pages();
+	KASSERT(swap0 == swap1);
+	KASSERT(mem0 == mem1);
+
+	success(TEST161_SUCCESS, SECRET, "as13");
 	return 0;
 }

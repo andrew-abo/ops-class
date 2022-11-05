@@ -84,13 +84,18 @@ struct segment {
 
 typedef uint32_t pte_status_t;
 
+typedef int ref_count_t;
+
 // Page table entry.
 // We don't store the virtual address which is inherently coded in the indices
 // of the multi-level page tables.
 struct pte {
-    pte_status_t status;  // {BACKED, VALID, BLOCK_INDEX} bits.
+    // TODO(aabo): Can we improve performance by having per page locks?
+    pte_status_t status;  // {BACKED, VALID} bits.
     paddr_t paddr;
     unsigned block_index;  // Page number offset on swap disk.
+    ref_count_t *ref_count;  // Pointer to number of copy-on-wirte references to this page.
+    struct spinlock *ref_count_lock;
 };
 
 struct addrspace {
@@ -187,5 +192,6 @@ void dump_page_table(struct addrspace *as);
 void dump_segments(struct addrspace *as);
 void as_destroy_page(struct addrspace *as, vaddr_t vaddr);
 int as_validate_page_table(struct addrspace *as);
+int lazy_copy_page(struct pte *dst_pte, struct addrspace *src, struct pte *src_pte);
 
 #endif /* _ADDRSPACE_H_ */

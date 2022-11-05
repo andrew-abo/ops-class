@@ -81,8 +81,10 @@ int get_page_via_table(struct addrspace *as, vaddr_t faultaddress);
 void free_swapmap_block(int block_index);
 size_t swap_used_pages(void);
 int save_page(struct pte *pte, int dirty);
+int restore_page(struct addrspace *as, struct pte *pte, vaddr_t vaddr);
 
 /* Fault handling function called by trap code */
+int handle_write_fault(struct addrspace *as, vaddr_t faultaddress);
 int vm_fault(int faulttype, vaddr_t faultaddress);
 paddr_t locking_find_victim_page(void);
 int evict_page(unsigned *coremap_index);
@@ -95,6 +97,7 @@ void free_kpages(vaddr_t vaddr);
 paddr_t alloc_pages(unsigned npages);
 void free_pages(vaddr_t vaddr);
 void vm_tlb_erase(void);
+void vm_tlb_remove(vaddr_t vaddr);
 unsigned paddr_to_core_idx(paddr_t paddr);
 paddr_t core_idx_to_paddr(unsigned p);
 paddr_t coremap_assign_to_kernel(unsigned p, unsigned npages);

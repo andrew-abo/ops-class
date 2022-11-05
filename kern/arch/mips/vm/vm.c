@@ -367,7 +367,7 @@ vm_get_vaddr(paddr_t paddr)
  * Invalidates one entry in TLB.
  *
  */
-static void 
+void 
 vm_tlb_remove(vaddr_t vaddr)
 {
 	uint32_t ehi;
@@ -609,6 +609,10 @@ block_read(unsigned block_index, paddr_t paddr)
 	KASSERT(swapdisk_pages > 0);
 	KASSERT(block_index < swapdisk_pages);
 
+#if OPT_VM_PERF
+    count_swap_in();
+#endif
+
 	lock_acquire(swapmap_lock);
 	KASSERT(bitmap_isset(swapmap, block_index));
 	lock_release(swapmap_lock);
@@ -647,6 +651,10 @@ block_write(unsigned block_index, paddr_t paddr)
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	KASSERT(swapdisk_pages > 0);
 	KASSERT(block_index < swapdisk_pages);
+
+#if OPT_VM_PERF
+    count_swap_out();
+#endif
 
 	lock_acquire(swapmap_lock);
 	KASSERT(bitmap_isset(swapmap, block_index));
@@ -780,6 +788,7 @@ save_page(struct pte *pte, int dirty) {
 
 	KASSERT(pte != NULL);
 
+	// TODO(aabo): Can we eliminate VM_PTE_BACKED by intiially marking all pages as dirty?
 	if (!(pte->status & VM_PTE_BACKED)) {
         lock_acquire(swapmap_lock);
         result = bitmap_alloc(swapmap, &block_index);
@@ -790,9 +799,6 @@ save_page(struct pte *pte, int dirty) {
         pte->block_index = block_index;
 	}
 	if (dirty || !(pte->status & VM_PTE_BACKED)) {
-#if OPT_VM_PERF
-        count_swap_out();
-#endif
         result = block_write(pte->block_index, pte->paddr);
         if (result) {
             return ENOSPC;
@@ -1250,6 +1256,7 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
     // TODO(aabo): check proc_getas() == ts->as but this seems
 	// to cause a deadlock.
 	vm_tlb_remove(ts->vaddr);
+	// Signal back to requester we are done.
 	V(ts->sem);
 }
 
@@ -1257,7 +1264,7 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
  * Flags a page as dirty in coremap and TLB.
  * 
  * Returns:
- *   0 on success, else 1.
+ *   0 on success, else -1.
  */
 static int
 flag_page_as_dirty(vaddr_t vaddr)
@@ -1265,7 +1272,7 @@ flag_page_as_dirty(vaddr_t vaddr)
 	paddr_t paddr;
 	unsigned p;
 	int spl;
-	int tlb_idx;
+	int idx;
 	uint32_t entryhi, entrylo;
 
 	// Only user space pages should be in the TLB.
@@ -1273,16 +1280,16 @@ flag_page_as_dirty(vaddr_t vaddr)
 
 	spinlock_acquire(&coremap_lock);
 	spl = splhigh();
-	tlb_idx = tlb_probe(vaddr & PAGE_FRAME, 0);
-	if (tlb_idx < 0) {
+	idx = tlb_probe(vaddr & PAGE_FRAME, 0);
+	if (idx < 0) {
         splx(spl);
         spinlock_release(&coremap_lock);
-        return 1;
+        return -1;
     }
-    tlb_read(&entryhi, &entrylo, tlb_idx);
+    tlb_read(&entryhi, &entrylo, idx);
     paddr = entrylo & TLBLO_PPAGE;
     entrylo |= TLBLO_DIRTY;
-    tlb_write(entryhi, entrylo, tlb_idx);
+    tlb_write(entryhi, entrylo, idx);
     p = paddr_to_core_idx(paddr);
     coremap[p].status |= VM_CORE_DIRTY;
     splx(spl);
@@ -1292,7 +1299,8 @@ flag_page_as_dirty(vaddr_t vaddr)
 }
 
 /*
- * Inserts a valid page table entry into translation lookaside buffer.
+ * Inserts a valid page table entry into translation lookaside buffer
+ * or replaces existing mapping.
  */
 static void
 vm_tlb_insert(paddr_t paddr, vaddr_t vaddr)
@@ -1345,6 +1353,45 @@ touch_paddr(paddr_t paddr) {
 }
 
 /*
+ * Allocates a new page and either clones from existing page if it is in 
+ * memory else restores from swap if not.
+ */
+int
+restore_page(struct addrspace *as, struct pte *pte, vaddr_t vaddr)
+{
+	paddr_t new_paddr;
+	int result;
+
+    KASSERT(!lock_do_i_hold(as->pages_lock));
+    new_paddr = alloc_pages(1);
+    if (new_paddr == 0) {
+        return ENOMEM;
+    }
+	lock_acquire(as->pages_lock);
+    if (pte->status & VM_PTE_VALID) {
+        memmove((void *)PADDR_TO_KVADDR(new_paddr),
+                (const void *)PADDR_TO_KVADDR(pte->paddr), PAGE_SIZE);
+    } else if (pte->status & VM_PTE_BACKED) {
+        KASSERT(swap_enabled);
+        result = block_read(pte->block_index, new_paddr);
+        if (result) {
+            free_pages(new_paddr);
+            lock_release(as->pages_lock);
+            return EIO;
+        }
+    }
+    spinlock_acquire(&coremap_lock);
+    coremap_assign_vaddr(new_paddr, as, vaddr);
+    pte->paddr = new_paddr;
+	touch_paddr(new_paddr);
+	pte->status |= VM_PTE_VALID;
+	vm_tlb_insert(pte->paddr, vaddr);
+    spinlock_release(&coremap_lock);
+    lock_release(as->pages_lock);
+    return 0;
+}
+
+/*
  * Retrieve page containing faultaddress.
  *
  * Search page table for faultaddress.
@@ -1363,9 +1410,7 @@ touch_paddr(paddr_t paddr) {
 int
 get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 {
-	paddr_t paddr;
 	struct pte *pte;
-	int result;
 
 #if OPT_VM_PERF
     count_fault();
@@ -1395,37 +1440,50 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 
 	// Harder case: page is not in memory, allocate a new page
 	// and restore if it was previously swapped out.
-	paddr = alloc_pages(1);
-	if (paddr == 0) {
-        return ENOMEM;
-    }
-	lock_acquire(as->pages_lock);
-    if (pte->status & VM_PTE_BACKED) {
-        KASSERT(swap_enabled);
-        result = block_read(pte->block_index, paddr);
-#if OPT_VM_PERF
-        count_swap_in();
-#endif
-        if (result) {
-            free_pages(paddr);
-            lock_release(as->pages_lock);
-            return EIO;
-        }
-    }
-	// Modify coremap and page table together atomically.
-	spinlock_acquire(&coremap_lock);
-	coremap_assign_vaddr(paddr, as, faultaddress);
-    pte->paddr = paddr;
-	touch_paddr(paddr);
-    pte->status |= VM_PTE_VALID;
-    vm_tlb_insert(pte->paddr, faultaddress);
-    spinlock_release(&coremap_lock);
-    lock_release(as->pages_lock);
-		
-    return 0;
+	return restore_page(as, pte, faultaddress);
 }
 
+/*
+ * Handles write page fault.  Copy on write if needed, mark dirty.
+ */
+int
+handle_write_fault(struct addrspace *as, vaddr_t faultaddress)
+{
+	struct pte *pte;
+	int result;
 
+	// TODO(aabo): write unit test for this.
+
+	lock_acquire(as->pages_lock);
+	pte = as_lookup_pte(as, faultaddress);
+	KASSERT(pte != NULL);
+	if (pte->ref_count_lock != NULL) {
+        // Shared page, copy on write.
+        spinlock_acquire(pte->ref_count_lock);
+        if (*pte->ref_count == 1) {
+            // I am the last holder of this page, skip copy.
+            spinlock_release(pte->ref_count_lock);
+            kfree(pte->ref_count);
+            kfree(pte->ref_count_lock);
+        } else {
+            // Make a private copy of the page.
+            (*pte->ref_count)--;
+            spinlock_release(pte->ref_count_lock);
+            lock_release(as->pages_lock);
+            result = restore_page(as, pte, faultaddress);
+            if (result) {
+                return result;
+            }
+            lock_acquire(as->pages_lock);
+        }
+        // Detach page from original.
+        pte->ref_count = NULL;
+        pte->ref_count_lock = NULL;
+    }
+    // Not a shared page.
+    lock_release(as->pages_lock);
+	return flag_page_as_dirty(faultaddress);
+}
 
 /*
  * Handles translation lookaside buffer faults.
@@ -1499,15 +1557,14 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	}
 	faultaddress &= PAGE_FRAME;
 	// All TLB entries are initially read-only (TLB "dirty=0").
-	// We detect writes as VM_FAULT_READONLY and flag as dirty
-	// for page cleaning.  Set write enable (TLB "dirty=1")
-	// and retry.
+	// We detect valid writes as VM_FAULT_READONLY (not a permission fault).
 	if (faulttype == VM_FAULT_READONLY) {
-		if (flag_page_as_dirty(faultaddress) == 0) {
-			// Successfully flagged in TLB, retry access.
-            return 0;
+        result = handle_write_fault(as, faultaddress);
+		if (result >= 0) {			
+			return result;
 		}
-		// Page is no longer in TLB, so treat as vanilla write page fault.
+		// Else page is no longer in TLB, so treat as a read fault.
+		// We will need to update TLB and re-fault on write.
 	}
 	result = get_page_via_table(as, faultaddress);
 	if (result) {
