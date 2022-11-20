@@ -51,7 +51,7 @@ struct pte
     }
     lock_acquire(as->pages_lock);
     spinlock_acquire_coremap();
-    coremap_assign_vaddr(paddr, as, vaddr);
+    coremap_assign_vaddr(paddr, pte, vaddr);
     pte->paddr = paddr;
 	pte->status = VM_PTE_VALID;
 	lock_release(as->pages_lock);
@@ -296,7 +296,7 @@ addrspacetest8(int nargs, char **args)
     KASSERT(as != NULL);
     pte0 = create_test_page(as, 0x00040000);
     KASSERT(pte0 != NULL);
-    as_destroy_page(as, 0x00040000);
+    as_destroy_vaddr(as, 0x00040000);
     as_destroy(as);
 	success(TEST161_SUCCESS, SECRET, "as8");
 
@@ -335,7 +335,7 @@ create_and_free(struct addrspace *as)
         // May generate repeats which will attempt to destroy a page
         // more than once, but that should be silently ignored.
         k = random() % n1_create_pages;
-        as_destroy_page(as, (offset + k * stride) * PAGE_SIZE);
+        as_destroy_vaddr(as, (offset + k * stride) * PAGE_SIZE);
     }
 
     offset += n1_create_pages * stride + random() % 0x1000;
@@ -401,8 +401,8 @@ addrspacetest10(int nargs, char **args)
     KASSERT(pte == NULL);
 
     // Free 1 page for user.  Free 1 page for kernel page table entry.
-    as_destroy_page(as, 0x0000);
-    as_destroy_page(as, 0x1000);
+    as_destroy_vaddr(as, 0x0000);
+    as_destroy_vaddr(as, 0x1000);
 
     // Should be able to get a free page now.
     pte = create_test_page(as, MAX_PAGES * PAGE_SIZE);
@@ -500,142 +500,20 @@ addrspacetest11(int nargs, char **args)
 	return 0;
 }
 
-// Test lazy_copy_page copies one pte correctly.
 int
 addrspacetest12(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
-    struct addrspace *src, *dst;
-    struct pte *src_pte;
-    struct pte *dst_pte;
-    vaddr_t vaddr = 0x1000;
-    vaddr_t kvaddr;
-    int result;
-	size_t swap0, swap1;
-	size_t mem0, mem1;
-    const uint32_t testdata = 0xfade1234;
-
-    kprintf("Starting as12 test...\n");
-	mem0 = coremap_used_bytes();
-	swap0 = swap_used_pages();
-
-    src = as_create();
-    KASSERT(src != NULL);
-    dst = as_create();
-    KASSERT(dst != NULL);
-
-    src_pte = create_test_page(src, vaddr);
-    KASSERT(src_pte != NULL);
-    lock_acquire(dst->pages_lock);
-    dst_pte = as_touch_pte(dst, vaddr);
-    KASSERT(dst_pte != NULL);
-    lock_release(dst->pages_lock);
-
-    // Write some test data.
-    kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
-    *(uint32_t *)kvaddr = testdata;
-
-    lock_acquire(src->pages_lock);
-    result = lazy_copy_page(dst_pte, src, src_pte);
-    KASSERT(result == 0);
-
-    // Check if copy matches source.
-    src_pte = as_lookup_pte(src, vaddr);
-    KASSERT(src_pte != NULL);
-    lock_acquire(dst->pages_lock);
-    KASSERT(src_pte->paddr == dst_pte->paddr);
-    KASSERT(src_pte->status == dst_pte->status);
-    KASSERT(src_pte->block_index == dst_pte->block_index);
-    KASSERT(src_pte->ref_count == dst_pte->ref_count);
-    KASSERT(src_pte->ref_count_lock == dst_pte->ref_count_lock);
-    kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
-    KASSERT(*(uint32_t *)kvaddr == testdata);
-    spinlock_acquire(dst_pte->ref_count_lock);
-    KASSERT(*dst_pte->ref_count == 2);
-    spinlock_release(dst_pte->ref_count_lock);
-    lock_release(src->pages_lock);
-    lock_release(dst->pages_lock);
-
-    as_destroy(src);
-    as_destroy(dst);
-
-	// Verify memory and swap have been cleaned up.
-	mem1 = coremap_used_bytes();
-	swap1 = swap_used_pages();
-	KASSERT(swap0 == swap1);
-	KASSERT(mem0 == mem1);
-
-	success(TEST161_SUCCESS, SECRET, "as12");
-	return 0;
+    // TODO(aabo): remove
+    return 0;
 }
 
-// Test restore_page creates a full page copy.
 int
 addrspacetest13(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
-    struct addrspace *src, *dst;
-    struct pte *src_pte;
-    struct pte *dst_pte;
-    vaddr_t vaddr = 0x1000;
-    vaddr_t kvaddr;
-    int result;
-	size_t swap0, swap1;
-	size_t mem0, mem1;
-    const uint32_t testdata = 0xfade1234;
-
-    kprintf("Starting as13 test...\n");
-	mem0 = coremap_used_bytes();
-	swap0 = swap_used_pages();
-
-    src = as_create();
-    KASSERT(src != NULL);
-    dst = as_create();
-    KASSERT(dst != NULL);
-
-    src_pte = create_test_page(src, vaddr);
-    KASSERT(src_pte != NULL);
-    lock_acquire(dst->pages_lock);
-    dst_pte = as_touch_pte(dst, vaddr);
-    KASSERT(dst_pte != NULL);
-    lock_release(dst->pages_lock);
-
-    // Write some test data.
-    kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
-    *(uint32_t *)kvaddr = testdata;
-
-    lock_acquire(src->pages_lock);
-    result = lazy_copy_page(dst_pte, src, src_pte);
-    KASSERT(result == 0);
-    lock_release(src->pages_lock);
-    
-    result = restore_page(dst, dst_pte, vaddr);
-    KASSERT(result == 0);
-
-    // Simulate detaching page from original.
-    spinlock_acquire(dst_pte->ref_count_lock);
-    (*dst_pte->ref_count)--;
-    spinlock_release(dst_pte->ref_count_lock);
-    dst_pte->ref_count = NULL;
-    dst_pte->ref_count_lock = NULL;
-    KASSERT(*src_pte->ref_count == 1);
-
-    // Confirm we have created a new phyiscal page with matching contents.
-    KASSERT(src_pte->paddr != dst_pte->paddr);
-    kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
-    KASSERT(*(uint32_t *)kvaddr == testdata);
-
-    as_destroy(src);
-    as_destroy(dst);
-
-	// Verify memory and swap have been cleaned up.
-	mem1 = coremap_used_bytes();
-	swap1 = swap_used_pages();
-	KASSERT(swap0 == swap1);
-	KASSERT(mem0 == mem1);
-
-	success(TEST161_SUCCESS, SECRET, "as13");
+    // TODO(aabo): remove
 	return 0;
 }

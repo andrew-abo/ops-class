@@ -121,7 +121,6 @@ paddr_t ram_getfirstfree(void);
 
 // A TLB shootdown request.
 struct tlbshootdown {
-    struct addrspace *as;
 	vaddr_t vaddr;
     struct semaphore *sem;  // Communicates when CPUs finish shootdowns.
 };

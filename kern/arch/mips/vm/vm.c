@@ -73,12 +73,9 @@ static struct spinlock coremap_lock;
 // 6. Release as->pages_lock
 // 7. Release vm_lock
 //
-// This order avoids a deadlock where two processes are trying to evict
-// from the other's page table, for example.  The process which grabs
-// vm_lock first will block the other from locking any page tables.  It
-// also ensures the operation does not leave the coremap and page table
-// in an inconsistent state.
-static struct lock *evict_lock;
+
+// TODO(aabo): Remove as from coremap.
+// TODO(aabo): lock pte before all pte access.
 
 // Acquire coremap_lock before accessing any of these shared variables.
 static paddr_t firstpaddr;  // First byte that can be allocated.
@@ -185,14 +182,6 @@ void spinlock_release_coremap() {
 	spinlock_release(&coremap_lock);
 }
 
-void lock_acquire_evict() {
-	lock_acquire(evict_lock);
-}
-
-void lock_release_evict() {
-	lock_release(evict_lock);
-}
-
 /*
  * Enable/disable swap.
  *
@@ -279,33 +268,9 @@ dump_coremap()
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		status = coremap[p].status;
-		kprintf("coremap[%3u]: status=0x%08x, paddr=0x%08x, as=0x%08x, vaddr=0x%08x, npages=%u\n", 
-		  p, status, core_idx_to_paddr(p), (vaddr_t)coremap[p].as, coremap[p].vaddr, npages);
+		kprintf("coremap[%3u]: status=0x%08x, paddr=0x%08x, pte=0x%08x, vaddr=0x%08x, npages=%u\n", 
+		  p, status, core_idx_to_paddr(p), (vaddr_t)coremap[p].pte, coremap[p].vaddr, npages);
 	}
-}
-
-/* 
- * Returns 1 if pages are found in coremap belonging to addrspace as,
- * else 0.
- *
- * This is a debugging tool only.
- */
-int
-as_in_coremap(struct addrspace *as)
-{
-	unsigned p;
-	int found_as = 0;
-
-	spinlock_acquire(&coremap_lock);
-	for (p = 0; p < page_max;) {
-		if (coremap[p].as == as) {
-            found_as = 1;
-			break;
-		}
-		p += get_core_npages(p);
-	}
-	spinlock_release(&coremap_lock);
-	return found_as;
 }
 
 void lock_and_dump_coremap()
@@ -331,21 +296,6 @@ unsigned
 paddr_to_core_idx(paddr_t paddr)
 {
     return (unsigned)(paddr / PAGE_SIZE);
-}
-
-/*
- * Returns addrspace that paddr belongs to.
- */
-struct addrspace 
-*vm_get_as(paddr_t paddr)
-{
-    unsigned p;
-	struct addrspace *as;
-
-	KASSERT(spinlock_do_i_hold(&coremap_lock));
-	p = paddr_to_core_idx(paddr);
-	as = coremap[p].as;
-	return as;
 }
 
 /*
@@ -427,7 +377,7 @@ validate_coremap()
 		status = coremap[p].status;
         if (status & VM_CORE_USED) {
 			used_pages += npages;
-			if (coremap[p].as == NULL) {
+			if (coremap[p].pte == NULL) {
 				// Kernel page.
                 KASSERT(coremap[p].vaddr >= MIPS_KSEG0);
                 KASSERT(coremap[p].vaddr < MIPS_KSEG1);
@@ -502,12 +452,14 @@ vm_init_coremap()
 	// Mark kernel and coremap pages as allocated in coremap.
 	p = paddr_to_core_idx(firstpaddr);
 	coremap[0].status = set_core_status(1, 0, 0, p);
-	coremap[0].as = NULL;
+	coremap[0].pte = NULL;
 	coremap[0].vaddr = (vaddr_t)MIPS_KSEG0;
 	coremap[0].prev = 0;
-	// Mark remainder of pages as one big free block.
+	// Mark remainder of pages as one big free cluster.
 	KASSERT(p < page_max);
 	coremap[p].status = set_core_status(0, 0, 0, page_max - p);
+	coremap[p].pte = NULL;
+	coremap[p].vaddr = (vaddr_t)MIPS_KSEG0;
 	coremap[p].prev = 0;
 	next_fit = p;
 	// Includes kernel and coremap in used_bytes.
@@ -539,11 +491,6 @@ vm_bootstrap(void)
 	struct stat statbuf;
     int result;
 
-    // Lock for modifying both coremap and a page table.
-    evict_lock = lock_create("evict");
-	if (evict_lock == NULL) {
-		panic("vm_bootstrap: Cannot create evict_lock.");
-	}
 	// vfs_open destructively uses filepath, so pass in a copy.
 	strcpy(vfs_path, SWAP_PATH);
 	result = vfs_open(vfs_path, O_RDWR, unused_mode, &swapdisk_vn);
@@ -700,22 +647,22 @@ static unsigned
 find_victim_page()
 {
     unsigned p;  // Page index into coremap.
-	unsigned block_pages;
+	unsigned cluster_pages;
 
     KASSERT(spinlock_do_i_hold(&coremap_lock));
 
     // CLOCK replacement policy.
 	p = next_evict; 
-	while ((coremap[p].as == NULL) || 
+	while ((coremap[p].pte == NULL) || 
 	      ((coremap[p].status & VM_CORE_ACCESSED) &&
 	       (coremap[p].status & VM_CORE_USED))) {
         coremap[p].status &= ~VM_CORE_ACCESSED;
-		block_pages = get_core_npages(p);
-		p = (p + block_pages) % page_max;
+		cluster_pages = get_core_npages(p);
+		p = (p + cluster_pages) % page_max;
 	}
-	KASSERT(coremap[p].as != NULL);
-	block_pages = get_core_npages(p);
-	next_evict = (p + block_pages) % page_max;
+	KASSERT(coremap[p].pte != NULL);
+	cluster_pages = get_core_npages(p);
+	next_evict = (p + cluster_pages) % page_max;
 	return p;
 }
 #endif
@@ -732,9 +679,6 @@ find_victim_page()
 	
 	KASSERT(spinlock_do_i_hold(&coremap_lock));
 
-	// TODO(aabo): Replace simple policy with higher performance policy
-	// such as CLOCK.
-
 	// Inventory available user pages.
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
@@ -742,7 +686,7 @@ find_victim_page()
 		if (!(coremap[p].status & VM_CORE_USED)) {
 			return p;
 		}
-		if (coremap[p].as == NULL) {
+		if (coremap[p].pte == NULL) {
 			// Skip kernel pages.
 			continue;
 		}
@@ -755,7 +699,7 @@ find_victim_page()
 	victim = random() % user_pages;
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
-		if (coremap[p].as == NULL) {
+		if (coremap[p].pte == NULL) {
 			// Skip kernel pages.
 			continue;
 		}
@@ -772,8 +716,6 @@ find_victim_page()
 /*
  * Save page to disk if needed.
  *
- * Caller responsible for locking page table.
- * 
  * Args:
  *   pte: Pointer to page table entry of page to maybe swap out.
  *   dirty: non-zero if page has been modified, else 0.
@@ -787,12 +729,16 @@ save_page(struct pte *pte, int dirty) {
 	int result;
 
 	KASSERT(pte != NULL);
+	KASSERT(lock_do_i_hold(pte->lock));
 
 	// TODO(aabo): Can we eliminate VM_PTE_BACKED by intiially marking all pages as dirty?
+	
 	if (!(pte->status & VM_PTE_BACKED)) {
         lock_acquire(swapmap_lock);
         result = bitmap_alloc(swapmap, &block_index);
 		if (result) {
+			lock_release(pte->lock);
+			lock_release(swapmap_lock);
 			return result;
 		}
         lock_release(swapmap_lock);
@@ -801,6 +747,7 @@ save_page(struct pte *pte, int dirty) {
 	if (dirty || !(pte->status & VM_PTE_BACKED)) {
         result = block_write(pte->block_index, pte->paddr);
         if (result) {
+			lock_release(pte->lock);
             return ENOSPC;
         }
 	}
@@ -822,105 +769,67 @@ evict_page(paddr_t *paddr)
 {
 	// "old" refers to page to be evicted.
 	struct core_page old_core;
+	int dirty;
 	paddr_t kvaddr;
-	struct pte *old_pte;
 	int p;
-	int old_as_already_locked;
 	struct tlbshootdown shootdown;
 	int result;
-
-	// DO NOT HOLD any VM locks while blocking on evict_lock, which
-	// will cause a deadlock if the evicting process (holding evict_lock)
-	// needs to access your as->pages_lock.
-	struct addrspace *as;
-	as = proc_getas();
-	if  (as != NULL) {
-		KASSERT(!lock_do_i_hold(as->pages_lock));
-	}
-	KASSERT(!spinlock_do_i_hold(&coremap_lock));
-
-	// There can be at most one process at a time performing an eviction
-	// to avoid a deadlock.  evict_lock must be acquired anytime we touch
-	// another process' pages.  We don't use coremap_lock to gate eviction
-	// because it is a spinlock which means we can't sleep while waiting
-	// for other locks such as as->pages_lock.  (We can't make coremap
-	// a sleep lock because it needs to be accessed in interrupt handlers--kfree).	
-	lock_acquire(evict_lock);
 
 	spinlock_acquire(&coremap_lock);
 	// Identify a page to evict.
 	p = find_victim_page();
 	if (p == 0) {
+		// No evictable pages.
 		spinlock_release(&coremap_lock);
-		lock_release(evict_lock);
 		return ENOMEM;
 	}
 	old_core = coremap[p];
+	// Allocate to kernel before releasing coremap to prevent
+	// another process from taking it.
+	*paddr = coremap_assign_to_kernel(p, 1);
 	if (!(old_core.status & VM_CORE_USED)) {
 		// New already free page (not actually an eviction).
-		// Allocate to kernel before releasing coremap to prevent
-		// another process from taking it.
-        *paddr = coremap_assign_to_kernel(p, 1);
 		used_bytes += PAGE_SIZE;
-	} // Else if page is not free, then it cannot be evicted behind
-	// our back because we hold evict_lock.
+	}
 	spinlock_release(&coremap_lock);
 
+	// Prevent page from being accessed while we evict.
+	lock_acquire(old_core.pte->lock);
 	if (old_core.status & VM_CORE_USED) {
 #if OPT_VM_PERF
         count_eviction();
 #endif
         // We assume we are evicting exactly one page.
         KASSERT((old_core.status & VM_CORE_NPAGES) == 1);
-		// It's possible we are already holding the page table lock.
-		// For example, if evicting from our own process, or
-		// as_copy where we hold two page tables one which is not our own.
-		// If so, don't re-lock.
-		old_as_already_locked = lock_do_i_hold(old_core.as->pages_lock);
-		if (!old_as_already_locked) {
-            lock_acquire(old_core.as->pages_lock);
-		}
-        // Deactivate page so it is not accessed during page out.
+		
+		// Deactivate page so it is not accessed during page out.
         // Once removed from TLB, any page faults will block
 		// waiting for old_as->pages_lock until we are done.
-		shootdown.as = old_core.as;
         shootdown.vaddr = old_core.vaddr;
 		shootdown.sem = tlbshootdown_sem;
 		vm_tlb_remove(old_core.vaddr);
 		ipi_broadcast_tlbshootdown(&shootdown);
-        old_pte = as_lookup_pte(old_core.as, old_core.vaddr);
 		// Refresh page dirty status in case page was accessed since we 
 		// last checked.  Page can no longer be accessed since we 
 		// cleared the TLB and locked the page table.
 		spinlock_acquire(&coremap_lock);
-		old_core = coremap[p];
+		dirty = coremap[p].status & VM_CORE_DIRTY;
 		spinlock_release(&coremap_lock);
-        result = save_page(old_pte, old_core.status & VM_CORE_DIRTY);
+        result = save_page(old_core.pte, dirty);
 		if (result) {
-            if (!old_as_already_locked) {
-                lock_release(old_core.as->pages_lock);
-            }
 			return result;
 		}
-		// Modify coremap and page table together atomically.
-		spinlock_acquire(&coremap_lock);
-        *paddr = coremap_assign_to_kernel(p, 1);
-        old_pte->status &= ~VM_PTE_VALID;
-        old_pte->paddr = (paddr_t)NULL;
-		spinlock_release(&coremap_lock);
-		if (!old_as_already_locked) {
-            lock_release(old_core.as->pages_lock);
-		}
+        old_core.pte->status &= ~VM_PTE_VALID;
+        old_core.pte->paddr = (paddr_t)NULL;
 	}
+	lock_release(old_core.pte->lock);
 	kvaddr = PADDR_TO_KVADDR(*paddr);
 	bzero((void *)kvaddr, PAGE_SIZE);
-
-	lock_release(evict_lock);
 	return 0;
 }
 
 /*
- * Returns coremap index of contiguous block of npages.
+ * Returns coremap index of contiguous cluster of npages.
  *
  * Caller is responsible for locking coremap.
  * 
@@ -934,21 +843,21 @@ static unsigned
 get_ppages(unsigned npages)
 {
     unsigned p;  // Page index into coremap.
-	unsigned block_pages;
+	unsigned cluster_pages;
 
     KASSERT(spinlock_do_i_hold(&coremap_lock));
 	KASSERT(npages > 0);
 
 	p = next_fit;
 	KASSERT(p < page_max);
-	block_pages = get_core_npages(p);
-	while ((coremap[p].status & VM_CORE_USED) || (block_pages < npages)) {
-		p = (p + block_pages) % page_max;
+	cluster_pages = get_core_npages(p);
+	while ((coremap[p].status & VM_CORE_USED) || (cluster_pages < npages)) {
+		p = (p + cluster_pages) % page_max;
 		if (p == next_fit) {
 			// No free pages.
 			return 0;
 		}
-		block_pages = get_core_npages(p);
+		cluster_pages = get_core_npages(p);
 	}
 	return p;
 }
@@ -960,19 +869,19 @@ get_ppages(unsigned npages)
  * 
  * Args:
  *   paddr: Phyiscal address to assign.
- *   as: Pointer to addrspace which vaddr belongs to.
+ *   pte: Pointer to corresponding page table entry.
  *   vaddr: Virtual address corresponding to paddr.
  * 
  * Returns:
  *   coremap index of paddr.
  */
 unsigned
-coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr) {
+coremap_assign_vaddr(paddr_t paddr, struct pte *pte, vaddr_t vaddr) {
     unsigned p;
 
     KASSERT(spinlock_do_i_hold(&coremap_lock));
 	p = paddr_to_core_idx(paddr);
-	coremap[p].as = as;
+	coremap[p].pte = pte;
 	coremap[p].vaddr = vaddr;
 	return p;
 }
@@ -987,41 +896,41 @@ coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr) {
  *   npages: Number of pages to assign.
  * 
  * Returns:
- *   Physical address of assigned block.
+ *   Physical address of assigned cluster.
  */
 paddr_t
 coremap_assign_to_kernel(unsigned p, unsigned npages)
 {
 	paddr_t paddr;
 	vaddr_t kvaddr;
-	unsigned block_pages;
+	unsigned cluster_pages;
 	unsigned prev;
 	unsigned next;
 
     KASSERT(spinlock_do_i_hold(&coremap_lock));
 
-	block_pages = get_core_npages(p);
-	KASSERT(block_pages >= npages);
+	cluster_pages = get_core_npages(p);
+	KASSERT(cluster_pages >= npages);
 	paddr = core_idx_to_paddr(p);
 	KASSERT((paddr & PAGE_FRAME) == paddr);
 	KASSERT((paddr >= firstpaddr) && (paddr <= lastpaddr));
 	kvaddr = PADDR_TO_KVADDR(paddr);
 	coremap[p].status =	set_core_status(/*used=*/1, 0, 0, npages);
-	coremap[p].as = NULL;
 	coremap[p].vaddr = kvaddr;
+	coremap[p].pte = NULL;
 
-	// Split out remaining free pages if any as a new block.
+	// Split out remaining free pages if any as a new cluster.
 	prev = p;
 	p += npages;
 	KASSERT(p <= page_max);
 	if (p == page_max) {
 		p = 0;
-	} else if (block_pages > npages) {
-		coremap[p].status = set_core_status(/*used=*/0, 0, 0, block_pages - npages);
-		coremap[p].as = NULL;
+	} else if (cluster_pages > npages) {
+		coremap[p].status = set_core_status(/*used=*/0, 0, 0, cluster_pages - npages);
 		coremap[p].vaddr = (vaddr_t)NULL;
+		coremap[p].pte = NULL;
 		coremap[p].prev = prev;
-		next = prev + block_pages;
+		next = prev + cluster_pages;
 		if (next < page_max) {
             coremap[next].prev = p;
 		}
@@ -1152,7 +1061,7 @@ alloc_kpages(unsigned npages)
 }
 
 /*
- * Frees a block of kernel pages starting at vaddr.
+ * Frees a cluster of kernel pages starting at vaddr.
  */
 void
 free_kpages(vaddr_t vaddr)
@@ -1167,7 +1076,7 @@ free_kpages(vaddr_t vaddr)
 }
 
 /*
- * Frees block of pages starting at paddr from coremap.
+ * Frees cluster of pages starting at paddr from coremap.
  *
  */
 void
@@ -1184,7 +1093,7 @@ free_pages(paddr_t paddr)
 
 	spinlock_acquire(&coremap_lock);
 
-	// Free this block.
+	// Free this cluster.
 	KASSERT(coremap[p].status & VM_CORE_USED);
 	npages = get_core_npages(p);
 	vaddr = coremap[p].vaddr;
@@ -1195,17 +1104,17 @@ free_pages(paddr_t paddr)
 
 	coremap[p].status &= VM_CORE_NPAGES;
 	coremap[p].vaddr = (vaddr_t)NULL;
-	coremap[p].as = NULL;
+	coremap[p].pte = NULL;
 	used_bytes -= npages * PAGE_SIZE;
 
-	// Attempt to coalesce next block.
+	// Attempt to coalesce next cluster.
 	next = p + npages;
 	if ((next < page_max) && !(coremap[next].status & VM_CORE_USED)) {
 		npages += get_core_npages(next);
 		KASSERT(npages <= VM_CORE_NPAGES);
         coremap[p].status &= ~VM_CORE_NPAGES;
 		coremap[p].status |= npages & VM_CORE_NPAGES;
-		// If next_fit was on the coalesced block, move to new head of block.
+		// If next_fit was on the coalesced cluster, move to new head of cluster.
 		if (next_fit == next) {
 			next_fit = p;
 		}
@@ -1215,14 +1124,14 @@ free_pages(paddr_t paddr)
 		}
 	}
 
-	// Attempt to coalesce previous block.
+	// Attempt to coalesce previous cluster.
 	prev = coremap[p].prev;
 	if (!(coremap[prev].status & VM_CORE_USED)) {
         npages += get_core_npages(prev);
 		KASSERT(npages <= VM_CORE_NPAGES);
         coremap[prev].status &= ~VM_CORE_NPAGES;
 		coremap[prev].status |= npages & VM_CORE_NPAGES;
-		// If next_fit was on the coalesced block, move to new head of block.
+		// If next_fit was on the coalesced cluster, move to new head of cluster.
 		if (next_fit == p) {
 			next_fit = prev;
 		}
@@ -1253,9 +1162,7 @@ coremap_used_bytes() {
 void
 vm_tlbshootdown(const struct tlbshootdown *ts)
 {
-    // TODO(aabo): check proc_getas() == ts->as but this seems
-	// to cause a deadlock.
-	vm_tlb_remove(ts->vaddr);
+ 	vm_tlb_remove(ts->vaddr);
 	// Signal back to requester we are done.
 	V(ts->sem);
 }
@@ -1355,6 +1262,9 @@ touch_paddr(paddr_t paddr) {
 /*
  * Allocates a new page and either clones from existing page if it is in 
  * memory else restores from swap if not.
+ * 
+ * Returns:
+ *   0 on success else errno.
  */
 int
 restore_page(struct addrspace *as, struct pte *pte, vaddr_t vaddr)
@@ -1363,31 +1273,33 @@ restore_page(struct addrspace *as, struct pte *pte, vaddr_t vaddr)
 	int result;
 
     KASSERT(!lock_do_i_hold(as->pages_lock));
+	KASSERT(lock_do_i_hold(pte->lock));
+
     new_paddr = alloc_pages(1);
     if (new_paddr == 0) {
         return ENOMEM;
     }
-	lock_acquire(as->pages_lock);
     if (pte->status & VM_PTE_VALID) {
+		// Clone page in memory pointed to by pte (e.g. copy on write).
         memmove((void *)PADDR_TO_KVADDR(new_paddr),
                 (const void *)PADDR_TO_KVADDR(pte->paddr), PAGE_SIZE);
     } else if (pte->status & VM_PTE_BACKED) {
+		// Restore from swap.
         KASSERT(swap_enabled);
         result = block_read(pte->block_index, new_paddr);
         if (result) {
             free_pages(new_paddr);
-            lock_release(as->pages_lock);
+            lock_release(pte->lock);
             return EIO;
         }
-    }
+    } // Else first access to new page.
     spinlock_acquire(&coremap_lock);
-    coremap_assign_vaddr(new_paddr, as, vaddr);
+    coremap_assign_vaddr(new_paddr, pte, vaddr);
     pte->paddr = new_paddr;
 	touch_paddr(new_paddr);
 	pte->status |= VM_PTE_VALID;
 	vm_tlb_insert(pte->paddr, vaddr);
     spinlock_release(&coremap_lock);
-    lock_release(as->pages_lock);
     return 0;
 }
 
@@ -1411,6 +1323,7 @@ int
 get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 {
 	struct pte *pte;
+	int result;
 
 #if OPT_VM_PERF
     count_fault();
@@ -1418,70 +1331,71 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 
 	lock_acquire(as->pages_lock);	
 	pte = as_touch_pte(as, faultaddress);
+	lock_release(as->pages_lock);
 	if (pte == NULL) {
-		lock_release(as->pages_lock);
 		return ENOMEM;
 	}
 	// Easy case: page is in memory, just update TLB.
+	lock_acquire(pte->lock);
 	if (pte->status & VM_PTE_VALID) {
         KASSERT((pte->paddr & PAGE_FRAME) == pte->paddr);
         vm_tlb_insert(pte->paddr, faultaddress);
 		spinlock_acquire(&coremap_lock);
 		touch_paddr(pte->paddr);
 		spinlock_release(&coremap_lock);
-        lock_release(as->pages_lock);
+		lock_release(pte->lock);
 #if OPT_VM_PERF
         count_tlb_fault();
 #endif		
         return 0;
 	}
-	// Following VM locking order to avoid a deadlock.
-	lock_release(as->pages_lock);
 
 	// Harder case: page is not in memory, allocate a new page
 	// and restore if it was previously swapped out.
-	return restore_page(as, pte, faultaddress);
+	result = restore_page(as, pte, faultaddress);
+	lock_release(pte->lock);
+	return result;
 }
 
 /*
  * Handles write page fault.  Copy on write if needed, mark dirty.
+ *
+ * Returns:
+ *   0 on success else errno.
  */
 int
 handle_write_fault(struct addrspace *as, vaddr_t faultaddress)
 {
 	struct pte *pte;
+	struct pte *copy;
 	int result;
 
 	// TODO(aabo): write unit test for this.
 
 	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, faultaddress);
+	lock_release(as->pages_lock);
 	KASSERT(pte != NULL);
-	if (pte->ref_count_lock != NULL) {
-        // Shared page, copy on write.
-        spinlock_acquire(pte->ref_count_lock);
-        if (*pte->ref_count == 1) {
-            // I am the last holder of this page, skip copy.
-            spinlock_release(pte->ref_count_lock);
-            kfree(pte->ref_count);
-            kfree(pte->ref_count_lock);
-        } else {
-            // Make a private copy of the page.
-            (*pte->ref_count)--;
-            spinlock_release(pte->ref_count_lock);
-            lock_release(as->pages_lock);
-            result = restore_page(as, pte, faultaddress);
-            if (result) {
-                return result;
-            }
-            lock_acquire(as->pages_lock);
+	lock_acquire(pte->lock);
+	if (pte->ref_count > 1) {
+        // Make a private copy of the page.
+		copy = as_create_pte();
+		if (copy == NULL) {
+			return ENOMEM;
+		}
+		copy->status = pte->status;
+		copy->paddr = pte->paddr;
+		copy->block_index = pte->block_index;
+        result = restore_page(as, copy, faultaddress);
+        if (result) {
+			as_destroy_pte(copy);
+			lock_release(pte->lock);
+            return result;
         }
-        // Detach page from original.
-        pte->ref_count = NULL;
-        pte->ref_count_lock = NULL;
+		as_insert_pte(as, faultaddress, copy, NULL);
+		pte->ref_count--;
     }
-    // Not a shared page.
-    lock_release(as->pages_lock);
+    lock_release(pte->lock);
 	return flag_page_as_dirty(faultaddress);
 }
 
@@ -1515,6 +1429,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	// behave unexpectedly.
 
 	// TLB faults should only occur in KUSEG.
+	// TODO(aabo): change to KASSERT.
 	if (faultaddress >= MIPS_KSEG0) {
 		panic("vm_fault: faultaddress = 0x%08x is not in KUSEG.\n", 
 		  faultaddress);

@@ -50,13 +50,19 @@
 #define VM_CORE_USED 0x10000  // Page is allocated and in use.
 #define VM_CORE_ACCESSED 0x20000  // Page has been accessed since last eviction sweep.
 #define VM_CORE_DIRTY 0x40000  // Page in memory differs from page on disk.
+#define VM_CORE_SHARED 0x80000  // Page is shared between addrspaces.
 #define VM_CORE_NPAGES 0xffff  // Mask for number of contiguous pages in this allocation
                             // starting at current index.
 
 struct core_page {
     uint32_t status;  // See bit masks above.
     vaddr_t vaddr;    // Virtual address where this page starts.
-    struct addrspace *as;    // Pointer to address space this page belongs to.
+    struct pte *pte;  // Pointer to shared page table entry if
+                          // status & VM_CORE_SHARED != 0. 'as' is not
+                          // meaningful when multiple addrspaces share
+                          // a page.
+    struct addrspace *as;  // Pointer to address space this page belongs to.
+                           // NULL if owned by kernel or shared page. 
     unsigned prev;  // Index of previous block in coremap.
 };
 
@@ -101,7 +107,7 @@ void vm_tlb_remove(vaddr_t vaddr);
 unsigned paddr_to_core_idx(paddr_t paddr);
 paddr_t core_idx_to_paddr(unsigned p);
 paddr_t coremap_assign_to_kernel(unsigned p, unsigned npages);
-unsigned coremap_assign_vaddr(paddr_t paddr, struct addrspace *as, vaddr_t vaddr);
+unsigned coremap_assign_vaddr(paddr_t paddr, struct pte *pte, vaddr_t vaddr);
 
 struct addrspace *vm_get_as(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);

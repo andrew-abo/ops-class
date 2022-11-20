@@ -79,50 +79,6 @@ as_create(void)
 }
 
 /*
- * Lazy copy page references not actual page data.
- */
-int
-lazy_copy_page(struct pte *dst_pte, struct addrspace *src, struct pte *src_pte)
-{
-    ref_count_t *ref_count;
-	struct spinlock *ref_count_lock;
-
-	KASSERT(lock_do_i_hold(src->pages_lock));
-
-	// TODO(aabo): this is not sufficient.  if the original page is evicted, then
-	// the copy paddr is stale.  Coremap only points to the original addrspace.
-	// Need to share entire pte so copies stay in sync with original?
-	// as->copy = NULL if this is not a copy, else points to original pte.
-	// replaces ref_count pointer.
-    dst_pte->status = src_pte->status;
-    dst_pte->paddr = src_pte->paddr;
-    dst_pte->block_index = src_pte->block_index;
-    if (src_pte->ref_count_lock == NULL) {
-        lock_release(src->pages_lock);
-        ref_count = kmalloc(sizeof(ref_count_t));
-        if (ref_count == NULL) {
-            return ENOMEM;
-        }
-        ref_count_lock = kmalloc(sizeof(struct spinlock));
-        if (ref_count_lock == NULL) {
-            kfree(ref_count);
-            return ENOMEM;
-        }
-		spinlock_init(ref_count_lock);
-        lock_acquire(src->pages_lock);
-		*ref_count = 1;
-        src_pte->ref_count = ref_count;
-		src_pte->ref_count_lock = ref_count_lock;
-    }
-    spinlock_acquire(src_pte->ref_count_lock);
-    (*src_pte->ref_count)++;
-    dst_pte->ref_count = src_pte->ref_count;
-    dst_pte->ref_count_lock = src_pte->ref_count_lock;
-    spinlock_release(src_pte->ref_count_lock);
-	return 0;
-}
-
-/*
  * Copies src page table and all referenced physical pages to dst.
  *
  * New physical pages are allocated and independent copies of the
@@ -163,19 +119,18 @@ copy_page_table(struct addrspace *dst,
 		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
 		if (level == PT_LEVELS - 1) {
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
+			src_pte = ((struct pte *)src_pages) + idx;
 			// Release src page table for possible eviction.
 			lock_release(src->pages_lock);
-			dst_pte = as_touch_pte(dst, vaddr);
-			lock_acquire(src->pages_lock);
-			if (dst_pte == NULL) {
-				return ENOMEM;
-			}
-			src_pte = ((struct pte *)src_pages) + idx;
-			KASSERT(src_pte != NULL);
-			result = lazy_copy_page(dst_pte, src, src_pte);
+			result = as_insert_pte(dst, vaddr, src_pte, &dst_pte);
 			if (result) {
 				return result;
 			}
+			KASSERT(dst_pte == NULL);
+			lock_acquire(src_pte->lock);
+			src_pte->ref_count++;
+			lock_release(src_pte->lock);
+			lock_acquire(src->pages_lock);
 			// Reactivate write detection.
 			vm_tlb_remove(vaddr);			
 			continue;
@@ -240,17 +195,27 @@ visit_page_table(void **pages, int level, vaddr_t vpn)
 	const char *tab[] = {"", "     ", "          ", "               "};
 	vaddr_t vaddr, next_vpn;
 	void **next_pages;
+	struct pte **leaf_pages;
 
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
 		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
 		if (level == PT_LEVELS - 1) {
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
-			pte = ((struct pte *)pages) + idx;
-			// TODO(aabo): Unify some page table walking functions to reduce 
-			// code duplication.
-            kprintf("%s[%2d] v0x%08x -> p0x%08x: status=0x%x, block_index=%u\n", tab[level], 
-			  idx, vaddr, pte->paddr, pte->status, pte->block_index);
+			leaf_pages = (struct pte **)pages;
+			pte = leaf_pages[idx];
+			kprintf("%s[%2d] ", tab[level], idx);
+			if (pte == NULL) {
+				kprintf("NULL\n");
+			} else {
+                lock_acquire(pte->lock);
+                // TODO(aabo): Unify some page table walking functions to reduce 
+                // code duplication.
+                kprintf("v0x%08x -> p0x%08x: status=0x%x, block_index=%u, ref_count=%d\n", 
+                  vaddr, pte->paddr, pte->status, pte->block_index, 
+                pte->ref_count);
+                lock_release(pte->lock);
+			}
 			continue;
         }
 		next_pages = pages[idx];
@@ -283,6 +248,7 @@ dump_page_table(struct addrspace *as)
  *   level: Current level of table to traverse starting at 0.
  *   vpn: Virtual page number (no page offset bits) .
  */
+/*
 static void
 validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn) 
 {
@@ -309,6 +275,7 @@ validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn)
 		validate_page_table(as, next_pages, next_level, next_vpn);
 	}
 }
+*/
 
 /*
  * Validates page table is consistent with address space and coremap.
@@ -318,12 +285,53 @@ validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn)
  * Returns:
  *   0 if valid, else panics.
  */
+/*
 int
 as_validate_page_table(struct addrspace *as)
 {
 	KASSERT(lock_do_i_hold(as->pages_lock));
 	validate_page_table(as, as->pages0, 0, 0x0);
     return 0;
+}
+*/
+
+/*
+ * Destroys page pointed to by pte.
+ */
+void
+as_destroy_page(struct pte *pte)
+{
+	KASSERT(pte != NULL);
+	lock_acquire(pte->lock);
+	pte->ref_count--;
+	if (pte->ref_count > 0) {
+        lock_release(pte->lock);
+        return;
+	}
+    if (pte->status & VM_PTE_VALID) {
+        free_pages(pte->paddr);
+    }
+    if (pte->status & VM_PTE_BACKED) {
+        free_swapmap_block(pte->block_index);
+    }
+	lock_release(pte->lock);
+	as_destroy_pte(pte);
+}
+
+/*
+ * Destroys page containing vaddr from addrspace as.
+ */
+void
+as_destroy_vaddr(struct addrspace *as, vaddr_t vaddr)
+{
+	struct pte *pte;
+
+    lock_acquire(as->pages_lock);
+	pte = as_lookup_pte(as, vaddr);
+	lock_release(as->pages_lock);
+	if (pte != NULL) {
+		as_destroy_page(pte);
+	}
 }
 
 /*
@@ -341,34 +349,19 @@ static void
 destroy_page_table(void **pages, int level) 
 {
 	struct pte *pte;
+	struct pte **leaf_pages;
 
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
-		if (level == PT_LEVELS - 1) {
-			pte = ((struct pte *)pages) + idx;
-			if (pte->ref_count_lock != NULL) {
-                spinlock_acquire(pte->ref_count_lock);
-                if (*pte->ref_count == 1) {
-                    spinlock_release(pte->ref_count_lock);
-                    kfree(pte->ref_count);
-                    kfree(pte->ref_count_lock);
-                } else {
-                    (*pte->ref_count)--;
-                    spinlock_release(pte->ref_count_lock);
-					continue;
-                }
-			}
-			if (pte->status & VM_PTE_VALID) {
-                free_pages(pte->paddr);
-            }
-			if (pte->status & VM_PTE_BACKED) {
-                free_swapmap_block(pte->block_index);
-			}
-			continue;
-        }
         if (pages[idx] == NULL) {
 			continue;
 		}
+		if (level == PT_LEVELS - 1) {
+			leaf_pages = (struct pte **)pages;
+			pte = leaf_pages[idx];
+			as_destroy_page(pte);
+			continue;
+        }
 		destroy_page_table(pages[idx], next_level);
 	}
 	if (level > 0) {
@@ -388,7 +381,6 @@ as_destroy(struct addrspace *as)
 	// Follow VM locking order to avoid another process trying to evict pages
 	// from the addrspace we are destroying.
 
-	lock_acquire_evict();
 	lock_acquire(as->pages_lock);
 	destroy_page_table(as->pages0, 0);
 	lock_release(as->pages_lock);
@@ -396,7 +388,6 @@ as_destroy(struct addrspace *as)
 	KASSERT(!lock_do_i_hold(as->heap_lock));
 	lock_destroy(as->heap_lock);
 	kfree(as);
-	lock_release_evict();
 }
 
 void
@@ -598,32 +589,77 @@ as_operation_is_valid(struct addrspace *as, vaddr_t vaddr, int read_request)
 }
 
 /*
- * Looks up vaddr in page table.
- * 
- * Look up an existing pte or create if does not exist.  Does
- * not allocate any physical pages.
+ * Creates a new empty page table entry.
+ *
+ * Returns NULL on error.
+ */
+struct pte
+*as_create_pte()
+{
+	struct pte *new_pte;
+
+    new_pte = kmalloc(sizeof(struct pte));
+    if (new_pte == NULL) {
+        return NULL;
+    }
+    new_pte->status = 0;
+    new_pte->block_index = 0;
+    new_pte->ref_count = 1;
+    new_pte->paddr = 0;
+    new_pte->lock = lock_create("pte");
+    if (new_pte->lock == NULL) {
+        kfree(new_pte);
+        return NULL;
+    }
+	return new_pte;
+}
+
+void
+as_destroy_pte(struct pte *pte)
+{
+    KASSERT(pte != NULL);
+	lock_destroy(pte->lock);
+	kfree(pte);
+}
+
+/*
+ * Walks an addrspace page table to given vaddr and performs
+ * various operations such as lookup, creation, insertion of page
+ * table entries.  This function is not intended to be called 
+ * directly but instead via one of the as_*_pte wrapper functions.
  *  
  * Caller is responsible for locking page table.
  * 
  * Args:
  *   as: Pointer to addrspace.
  *   vaddr: Virtual address to find.
- *   create: Creates missing levels and table entries if 1, else
- *     sets pte_ptr = NULL when encounters a missing level or entry.
- *   pte_ptr: Pointer to return pointer to page table entry.
+ *   create: Creates missing levels and table entries if 1.
+ *   new_pte: Pointer to new page table entry to insert.  
+ *   ret_pte: Pointer to return pointer to pte as below, unless NULL.
+ * 
+ *   create  new_pte
+ *     0     NULL      *ret_pte = existing pte for vaddr else NULL if not found.
+ *     0     non-NULL  reserved
+ *     1     NULL      *ret_pte = new empty pte for vaddr, else NULL on error.
+ *     1     non-NULL  *ret_pte = existing pte for vaddr, else NULL on error.
  * 
  * Returns:
  *  0 on success. pte_ptr will refer to the table entry or NULL if not found.
  *  Else errno value if there is a system error.
  */
 static int 
-touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
+touch_pte(struct addrspace *as, 
+          vaddr_t vaddr, 
+		  int create, 
+		  struct pte *new_pte, 
+		  struct pte **ret_pte)
 {
 	int idx;
 	unsigned vpn;
 	void **pages;
 	void **next_pages;
-	struct pte *leaf_pages;
+	struct pte **leaf_pages;
+	struct pte *old_pte;
 	const unsigned mask[] = {0x1f<<15, 0x1f<<10, 0x1f<<5, 0x1f};
 	const unsigned shift[] = {15, 10, 5, 0};
 	int level;
@@ -633,8 +669,10 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
 	// Walk down to leaf page table.
 	vpn = vaddr >> PAGE_OFFSET_BITS;
 	pages = as->pages0;
-	*pte_ptr = NULL;
-	for (level = 0; level < PT_LEVELS - 2; level++) {
+	if (ret_pte != NULL) {
+        *ret_pte = NULL;
+	}
+	for (level = 0; level < PT_LEVELS - 1; level++) {
         idx = (vpn & mask[level]) >> shift[level];
         next_pages = pages[idx];
         if (next_pages == NULL) {
@@ -655,35 +693,30 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
 		}
 		pages = next_pages;
 	}
-
-	// Get base address of leaf table.
 	idx = (vpn & mask[level]) >> shift[level];
-	leaf_pages = (struct pte *)(pages[idx]);
-	if (leaf_pages == NULL) {
-        if (!create) {
-            // vaddr not found.
-            return 0;
-        }
-        // Release page table before potential eviction.
-        lock_release(as->pages_lock);
-        leaf_pages = kmalloc(sizeof(struct pte) * (1 << VPN_BITS_PER_LEVEL));
-        lock_acquire(as->pages_lock);
-		if (leaf_pages == NULL) {
+    leaf_pages = (struct pte **)pages;
+	old_pte = leaf_pages[idx];
+	if (ret_pte != NULL) {
+        *ret_pte = old_pte;
+	}
+	if ((old_pte == NULL) && !create) {
+        // vaddr not found.
+        return 0;
+    }
+	if ((old_pte != NULL) && (new_pte == NULL)) {
+		// Found pte and don't replace.
+		return 0;
+	}
+	if (new_pte == NULL) {
+        new_pte = as_create_pte();
+		if (new_pte == NULL) {
 			return ENOMEM;
 		}
-		// Install and initialize leaf ptes.
-        pages[idx] = leaf_pages;
-        for (idx = 0; idx < (1 << VPN_BITS_PER_LEVEL); idx++) {
-            leaf_pages[idx].status = 0;
-            leaf_pages[idx].block_index = 0;
-            leaf_pages[idx].paddr = (paddr_t)NULL;
-			leaf_pages[idx].ref_count = NULL;
-			leaf_pages[idx].ref_count_lock = NULL;
-        }
-    }
-	level++;
-	idx = (vpn & mask[level]) >> shift[level];
-    *pte_ptr = leaf_pages + idx;
+		if (ret_pte != NULL) {
+            *ret_pte = new_pte;
+		}
+	}
+	leaf_pages[idx] = new_pte;
     return 0;
 }
 
@@ -694,7 +727,7 @@ touch_pte(struct addrspace *as, vaddr_t vaddr, int create, struct pte **pte_ptr)
  *  
  * Args:
  *   as: Pointer to addrspace.
- *   vaddr: Virtual address to find.
+ *   vaddr: Virtual address to find in as.
  * 
  * Returns:
  *   Pointer to pte else NULL if could not find and create.
@@ -704,13 +737,13 @@ struct pte
 *as_touch_pte(struct addrspace *as, vaddr_t vaddr)
 {
 	int result;
-	struct pte *pte;
+	struct pte *old_pte;
 
-	result = touch_pte(as, vaddr, /*create=*/1, &pte);
+	result = touch_pte(as, vaddr, /*create=*/1, NULL, &old_pte);
 	if (result) {
 		return NULL;
 	}
-	return pte;
+	return old_pte;
 }
 
 /*
@@ -725,62 +758,35 @@ struct pte
 *as_lookup_pte(struct addrspace *as, vaddr_t vaddr)
 {
 	int result;
-	struct pte *pte;
+	struct pte *old_pte;
 
-	result = touch_pte(as, vaddr, /*create=*/0, &pte);
+	result = touch_pte(as, vaddr, /*create=*/0, NULL, &old_pte);
 	KASSERT(result == 0);
-	if (pte == NULL) {
+	if (old_pte == NULL) {
 		return NULL;
 	}
-	return pte;
+	return old_pte;
 }
 
 /*
- * Frees physical page corresponding to vaddr.
- * If page does not exist do nothing.
+ * Insert new_pte into addrspace page table.
  * 
+ * Caller is responsible for locking as->pages_lock.
+ *  
  * Args:
- *   as: Pointer to address space to modify.
- *   vaddr: Virtual address of page to destroy.
+ *   as: Pointer to addrspace.
+ *   vaddr: Virtual address to find in as.
+ *   new_pte: Pointer to new page table entry to insert.
+ *   old_pte: Pointer to return old page table entry at vaddr.
+ * 
+ * Returns:
+ *   0 on success, else errno.
  */
-void
-as_destroy_page(struct addrspace *as, vaddr_t vaddr)
+int
+as_insert_pte(struct addrspace *as,
+              vaddr_t vaddr,
+			  struct pte *new_pte, 
+			  struct pte **old_pte_ptr)
 {
-	struct pte *pte;
-
-	lock_acquire(as->pages_lock);
-	pte = as_lookup_pte(as, vaddr);
-	if (pte == NULL) {
-		// Silently ignores non-existent pages.
-		lock_release(as->pages_lock);
-		return;
-	}
-	if (pte->ref_count_lock != NULL) {
-        spinlock_acquire(pte->ref_count_lock);
-        if (*pte->ref_count == 1) {
-            spinlock_release(pte->ref_count_lock);
-            kfree(pte->ref_count);
-            kfree(pte->ref_count_lock);
-			pte->ref_count = NULL;
-			pte->ref_count_lock = NULL;
-        } else {
-            (*pte->ref_count)--;
-            spinlock_release(pte->ref_count_lock);
-	        pte->status = 0;
-	        pte->block_index = 0;
-	        pte->paddr = (paddr_t)NULL;
-	        lock_release(as->pages_lock);
-			return;
-        }
-	}
-	if (pte->status & VM_PTE_VALID) {
-        free_pages(pte->paddr);
-	}
-	if (pte->status & VM_PTE_BACKED) {
-        free_swapmap_block(pte->block_index);
-	}
-	pte->status = 0;
-	pte->block_index = 0;
-	pte->paddr = (paddr_t)NULL;
-	lock_release(as->pages_lock);
+	return touch_pte(as, vaddr, /*create=*/1, new_pte, old_pte_ptr);
 }

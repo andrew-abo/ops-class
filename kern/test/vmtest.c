@@ -220,37 +220,36 @@ int
 vmtest5(int nargs, char **args)
 {
 	vaddr_t kvaddr;
-	paddr_t paddr;
 	int result;
 	unsigned i;
-	struct pte pte;
+	struct pte *pte;
 	(void)nargs;
 	(void)args;
 
 	kvaddr = alloc_kpages(1);
 	KASSERT(kvaddr != 0);
-	paddr = KVADDR_TO_PADDR(kvaddr);
-	pte.status = VM_PTE_VALID;
-	pte.block_index = 0;
-	pte.paddr = paddr;
 
 	// Fill page with known sequence of bytes.
 	for (i = 0; i < PAGE_SIZE; i++) {
 		*(unsigned char *)(kvaddr + i) = i % 256;
 	}
-	result = save_page(&pte, 0);
-	KASSERT(result == 0);
-	result = block_write(pte.block_index, paddr);
+	pte = as_create_pte();
+	KASSERT(pte != NULL);
+	lock_acquire(pte->lock);
+	pte->paddr = KVADDR_TO_PADDR(kvaddr);
+	result = save_page(pte, 0);
 	KASSERT(result == 0);
 	bzero((void *)kvaddr, PAGE_SIZE);
-	result = block_read(pte.block_index, paddr);
+	result = block_read(pte->block_index, pte->paddr);
 	KASSERT(result == 0);
-	
+	lock_release(pte->lock);
+
 	// Confirm known sequence read back.
 	for (i = 0; i < PAGE_SIZE; i++) {
 		KASSERT(*(unsigned char *)(kvaddr + i) == (i % 256));
 	}
 	free_kpages(kvaddr);
+	as_destroy_pte(pte);
 
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm5");
@@ -277,6 +276,7 @@ vmtest6(int nargs, char **args)
     pte = create_test_page(as, faultaddress);
     KASSERT(pte != NULL);
 
+    lock_acquire(pte->lock);
 	paddr = pte->paddr;
 	kvaddr = PADDR_TO_KVADDR(paddr);
 	// Fill page with known sequence of bytes.
@@ -285,18 +285,18 @@ vmtest6(int nargs, char **args)
 	}
 
 	// Swap page out.
-	lock_acquire(as->pages_lock);
 	result = save_page(pte, /*dirty=*/1);
+	KASSERT(result == 0);
 	pte->status = VM_PTE_BACKED;
 	pte->paddr = 0;
-	lock_release(as->pages_lock);
-	KASSERT(result == 0);
+	lock_release(pte->lock);
 	free_pages(paddr);
 	
 	// Zero out the old memory for good meeasure.
 	bzero((void *)kvaddr, PAGE_SIZE);
 
 	// Access the backed page via page table.
+	// Should restore page to memory and update page table.
 	result = get_page_via_table(as, faultaddress);
 	KASSERT(result == 0);
 	kvaddr = PADDR_TO_KVADDR(pte->paddr);
@@ -435,6 +435,7 @@ vmtest9(int nargs, char **args)
 		core_idx_to_vaddr[core_idx] = vaddr;
 	}
 	KASSERT(pte == NULL);
+	KASSERT(p > 0);
 
 	// Re-enable swapping.
 	set_swap_enabled(1);

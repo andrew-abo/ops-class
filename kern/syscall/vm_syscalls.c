@@ -56,7 +56,7 @@ int sys_sbrk(intptr_t amount, void **mem)
 		return EINVAL;
 	}
 	for (vaddr = (vaddr_t)newheaptop; vaddr < as->vheaptop; vaddr += PAGE_SIZE) {
-		as_destroy_page(as, vaddr);
+		as_destroy_vaddr(as, vaddr);
 	}
 	as->vheaptop = (vaddr_t)newheaptop;
 	lock_release(as->heap_lock);
