@@ -335,6 +335,7 @@ create_and_free(struct addrspace *as)
         // May generate repeats which will attempt to destroy a page
         // more than once, but that should be silently ignored.
         k = random() % n1_create_pages;
+        //kprintf("destroy %d@ 0x%08x\n", k, (offset + k * stride) * PAGE_SIZE);
         as_destroy_vaddr(as, (offset + k * stride) * PAGE_SIZE);
     }
 

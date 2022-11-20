@@ -54,29 +54,6 @@ static int coremap_enabled = 0;
 // interrupt handlers which can deadlock if they go to sleep.
 static struct spinlock coremap_lock;
 
-// evict_lock is the gatekeeper for performing an operation that modifies
-// a foreign process' page table.  To avoid a deadlock, we require this
-// locking order:
-//
-// 0. Release all VM locks (coremap_lock/pages_lock) before any operation
-// that may trigger an eviction:
-//    * Requesting memory (kmalloc, alloc_pages, alloc_kpages)
-//    * Touching user memory (which could be swapped out and require
-//      an eviction to swap in).
-//    * NOTE: Touching kernel memory won't trigger evictions because it
-//      is never swapped out.
-// 1. Lock evict_lock (sleep lock)
-// 2. Lock as->pages_lock (sleep lock)
-// 3. Lock coremap (spinlock)
-// 4. Modify coremap and page table togther as one atomic edit.
-// 5. Release coremap
-// 6. Release as->pages_lock
-// 7. Release vm_lock
-//
-
-// TODO(aabo): Remove as from coremap.
-// TODO(aabo): lock pte before all pte access.
-
 // Acquire coremap_lock before accessing any of these shared variables.
 static paddr_t firstpaddr;  // First byte that can be allocated.
 static paddr_t lastpaddr;   // Last byte that can be allocated.
@@ -793,7 +770,6 @@ evict_page(paddr_t *paddr)
 	}
 	spinlock_release(&coremap_lock);
 
-	// Prevent page from being accessed while we evict.
 	lock_acquire(old_core.pte->lock);
 	if (old_core.status & VM_CORE_USED) {
 #if OPT_VM_PERF
@@ -804,7 +780,7 @@ evict_page(paddr_t *paddr)
 		
 		// Deactivate page so it is not accessed during page out.
         // Once removed from TLB, any page faults will block
-		// waiting for old_as->pages_lock until we are done.
+		// waiting for old_core.pte->lock until we are done.
         shootdown.vaddr = old_core.vaddr;
 		shootdown.sem = tlbshootdown_sem;
 		vm_tlb_remove(old_core.vaddr);
