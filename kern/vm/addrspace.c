@@ -117,6 +117,10 @@ copy_page_table(struct addrspace *dst,
 	int next_level = level + 1;
 	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
 		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
+		next_pages = src_pages[idx];
+        if (next_pages == NULL) {
+			continue;
+		}		
 		if (level == PT_LEVELS - 1) {
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
 			src_pte = ((struct pte **)src_pages)[idx];
@@ -132,10 +136,6 @@ copy_page_table(struct addrspace *dst,
 			vm_tlb_remove(vaddr);			
 			continue;
         }
-		next_pages = src_pages[idx];
-        if (next_pages == NULL) {
-			continue;
-		}		
 		result = copy_page_table(dst, src, next_pages, next_level, next_vpn);
 		if (result) {
 			return result;
@@ -649,7 +649,7 @@ struct pte
  *   as: Pointer to addrspace.
  *   vaddr: Virtual address to find in as.
  *   new_pte: Pointer to new page table entry to insert.
- *   old_pte: Pointer to return old page table entry at vaddr.
+ *   old_pte: Pointer to return old page table entry at vaddr, unless NULL.
  * 
  * Returns:
  *   0 on success, else errno.
@@ -668,7 +668,9 @@ as_insert_pte(struct addrspace *as,
 	if (result) {
 		return result;
 	}
-	*old_pte_ptr = leaf_pages[idx];
+	if (old_pte_ptr != NULL) {
+        *old_pte_ptr = leaf_pages[idx];
+	}
 	leaf_pages[idx] = new_pte;
 	return 0;
 }

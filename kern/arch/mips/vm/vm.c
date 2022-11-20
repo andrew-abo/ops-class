@@ -1362,13 +1362,18 @@ handle_write_fault(struct addrspace *as, vaddr_t faultaddress)
 		copy->status = pte->status;
 		copy->paddr = pte->paddr;
 		copy->block_index = pte->block_index;
+		lock_acquire(copy->lock);
         result = restore_page(as, copy, faultaddress);
+		lock_release(copy->lock);
         if (result) {
 			as_destroy_pte(copy);
 			lock_release(pte->lock);
             return result;
         }
+		lock_acquire(as->pages_lock);
+		// TODO(aabo): combine above page table traversal with this using touch_leaf_pages.
 		as_insert_pte(as, faultaddress, copy, NULL);
+		lock_release(as->pages_lock);
 		pte->ref_count--;
     }
     lock_release(pte->lock);
