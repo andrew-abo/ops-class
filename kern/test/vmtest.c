@@ -486,12 +486,14 @@ vmtest10(int nargs, char **args)
 {
 	struct addrspace *as;
 	vaddr_t vaddr;
+	vaddr_t kvaddr;
 	unsigned p;
 	struct pte *pte;
 	(void)nargs;
 	(void)args;
 	size_t swap0, swap1;
 	size_t mem0, mem1;
+	int result;
 	// Choose a number that is large enough to cause some page evictions.
 	const unsigned test_pages = 4096;
 
@@ -503,6 +505,7 @@ vmtest10(int nargs, char **args)
     KASSERT(as != NULL);
 
     // Exhaust memory to cause some page evictions.
+	kprintf("Create pages\n");
     for (p = 0; p < test_pages; p++) {
 		if (p % 64 == 0) {
 			kprintf("\n");
@@ -511,6 +514,28 @@ vmtest10(int nargs, char **args)
 		vaddr = 0x1000 * p;
         pte = create_test_page(as, vaddr);
 		KASSERT(pte != NULL);
+        kvaddr = PADDR_TO_KVADDR(pte->paddr);
+		*(unsigned *)kvaddr = p;
+	}
+	kprintf("\n");
+
+	// Read back pages.
+	kprintf("Read pages\n");
+	for (p = 0; p < test_pages; p++) {
+		if (p % 64 == 0) {
+			kprintf("\n");
+		}
+		kprintf(".");
+		vaddr = 0x1000 * p;
+		// Fetch from swap if needed.
+		result = get_page_via_table(as, vaddr);
+		KASSERT(result == 0);
+		lock_acquire(as->pages_lock);
+		pte = as_lookup_pte(as, vaddr);
+		lock_release(as->pages_lock);
+		KASSERT(pte != NULL);
+        kvaddr = PADDR_TO_KVADDR(pte->paddr);
+		KASSERT(*(unsigned *)kvaddr == p);
 	}
 
 	// Clean up.
