@@ -639,6 +639,7 @@ static const char *testmenu[] = {
 	"[vm8] select page for eviction      ",
 	"[vm9] evict a page                  ",
 	"[vm10] allocate more than phys mem  ",
+	"[vm11] copy on write                ",
 	"[tt1] Thread test 1                 ",
 	"[tt2] Thread test 2                 ",
 	"[tt3] Thread test 3                 ",
@@ -832,6 +833,7 @@ static struct {
 	{"vm8",     vmtest8 },
 	{"vm9",     vmtest9 },
 	{"vm10",    vmtest10 },
+	{"vm11",    vmtest11 },
 #if OPT_NET
 	{ "net",	nettest },
 #endif

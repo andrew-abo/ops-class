@@ -484,6 +484,8 @@ addrspacetest11(int nargs, char **args)
         dst_kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
         KASSERT(*(unsigned *)dst_kvaddr == j);
         KASSERT(*(unsigned *)src_kvaddr == *(unsigned *)dst_kvaddr);
+        // Tests copy is by reference only.
+        KASSERT(src_pte->paddr == dst_pte->paddr);
     }
     lock_release(src->pages_lock);
     lock_release(dst->pages_lock);
@@ -507,6 +509,7 @@ addrspacetest12(int nargs, char **args)
     (void)nargs;
     (void)args;
     // TODO(aabo): remove
+    // write unit tests for as_*_pte.
     return 0;
 }
 

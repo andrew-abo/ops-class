@@ -388,7 +388,9 @@ vmtest8(int nargs, char **args)
 	return 0;
 }
 
-// Tests a victim page is properly evicted.
+// Tests evict_page selects victim page and contents written
+// to swap disk are correct.
+//
 int
 vmtest9(int nargs, char **args)
 {
@@ -523,4 +525,92 @@ vmtest10(int nargs, char **args)
 	kprintf_t("\n");
 	success(TEST161_SUCCESS, SECRET, "vm10");
 	return 0;
+}
+
+// Tests handle_write_fault makes copy on write when
+// ref_count > 1.
+//
+int
+vmtest11(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+
+
+	struct addrspace *src, *dst;
+	vaddr_t vaddr;
+	vaddr_t kvaddr;
+	struct pte *src_pte, *dst_pte;
+	size_t swap0, swap1;
+	size_t mem0, mem1;
+	const unsigned test_pages = 32;
+	unsigned i;
+	int result;
+
+	mem0 = coremap_used_bytes();
+	swap0 = swap_used_pages();
+
+    src = as_create();
+    KASSERT(src != NULL);
+
+    for (i = 0; i < test_pages; i++) {
+        vaddr = i * PAGE_SIZE;
+        src_pte = create_test_page(src, vaddr);
+		KASSERT(src_pte != NULL);
+        kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
+        *(unsigned *)kvaddr = i;
+    }
+
+    // Create shared copy.
+    result = as_copy(src, &dst);
+    KASSERT(result == 0);
+
+    // Check copy by reference matches source.
+	lock_acquire(dst->pages_lock);
+    for (i = 0; i < test_pages; i++) {
+        vaddr = i * PAGE_SIZE;
+		dst_pte = as_lookup_pte(dst, vaddr);
+		KASSERT(dst_pte != NULL);
+		kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
+		KASSERT(*(unsigned *)kvaddr == i);
+	}
+	lock_release(dst->pages_lock);
+
+    for (i = 0; i < test_pages; i++) {
+        vaddr = i * PAGE_SIZE;
+        // Create private copy.
+        result = handle_write_fault(dst, vaddr);
+		KASSERT(result == 0);
+        // Check private copy matches source.
+        lock_acquire(dst->pages_lock);
+        lock_acquire(src->pages_lock);
+		dst_pte = as_lookup_pte(dst, vaddr);
+		KASSERT(dst_pte != NULL);
+		kvaddr = PADDR_TO_KVADDR(dst_pte->paddr);
+		KASSERT(*(unsigned *)kvaddr == i);
+		// Modify private copy.
+		*(unsigned *)kvaddr = 0;
+		// Check source unmodified.
+		src_pte = as_lookup_pte(src, vaddr);
+		KASSERT(src_pte != NULL);
+		kvaddr = PADDR_TO_KVADDR(src_pte->paddr);
+		KASSERT(*(unsigned *)kvaddr == i);
+		lock_release(src->pages_lock);
+		lock_release(dst->pages_lock);
+	}
+
+	// Clean up.
+    as_destroy(src);
+	as_destroy(dst);
+
+	// Verify memory and swap have been cleaned up.
+	mem1 = coremap_used_bytes();
+	swap1 = swap_used_pages();
+	KASSERT(swap0 == swap1);
+	KASSERT(mem0 == mem1);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm11");
+	return 0;
+	
 }
