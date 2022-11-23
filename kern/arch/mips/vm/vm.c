@@ -656,7 +656,12 @@ find_victim_page()
 	
 	KASSERT(spinlock_do_i_hold(&coremap_lock));
 
-	// Inventory available user pages.
+	// Use two passes to select a random page.  One could use reservoir
+	// sampling to do this in one pass at the expense of generating more
+	// random numbers.  Since the coremap is guaranteed to be resident in 
+	// memory two passes should be fast enough.
+
+	// Pass 1: Inventory available user pages.
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		// First choice are pages that became free since we last checked.
@@ -667,17 +672,25 @@ find_victim_page()
 			// Skip kernel pages.
 			continue;
 		}
+		if (lock_do_i_hold(coremap[p].pte->lock)) {
+			// Skip pages that are locked.
+			continue;
+		}
 		user_pages++;
 	}
 	if (user_pages == 0) {
         return 0;
 	}
-	// Choose one of the occupied user pages at random.
+	// Pass 2: Choose one of the occupied user pages at random.
 	victim = random() % user_pages;
 	for (p = 0; p < page_max; p += npages) {
 		npages = get_core_npages(p);
 		if (coremap[p].pte == NULL) {
 			// Skip kernel pages.
+			continue;
+		}
+		if (lock_do_i_hold(coremap[p].pte->lock)) {
+			// Skip pages that are locked.
 			continue;
 		}
 		if (victim == 0) {
@@ -785,11 +798,12 @@ evict_page(paddr_t *paddr)
 		shootdown.sem = tlbshootdown_sem;
 		vm_tlb_remove(old_core.vaddr);
 		ipi_broadcast_tlbshootdown(&shootdown);
-		// Refresh page dirty status in case page was accessed since we 
-		// last checked.  Page can no longer be accessed since we 
-		// cleared the TLB and locked the page table.
+		// Refresh page dirty status in case page was modified in the
+		// windowe between when we sampled coremap and before we locked
+		// the page table entry.
 		spinlock_acquire(&coremap_lock);
-		dirty = coremap[p].status & VM_CORE_DIRTY;
+		dirty = (coremap[p].status & VM_CORE_DIRTY) || 
+		  (old_core.status & VM_CORE_DIRTY);
 		spinlock_release(&coremap_lock);
         result = save_page(old_core.pte, dirty);
 		if (result) {
@@ -1346,15 +1360,13 @@ handle_write_fault(struct addrspace *as, vaddr_t faultaddress)
 	struct pte *copy;
 	int result;
 
-	// TODO(aabo): write unit test for this.
-
 	lock_acquire(as->pages_lock);
 	pte = as_lookup_pte(as, faultaddress);
 	lock_release(as->pages_lock);
 	KASSERT(pte != NULL);
 	lock_acquire(pte->lock);
 	if (pte->ref_count > 1) {
-        // Make a private copy of the page.
+        // Copy on write: make a private copy of the page.
 		copy = as_create_pte();
 		if (copy == NULL) {
 			return ENOMEM;

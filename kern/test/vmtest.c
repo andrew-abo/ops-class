@@ -388,6 +388,8 @@ vmtest8(int nargs, char **args)
 	return 0;
 }
 
+#define EVICTIONS 100
+
 // Tests evict_page selects victim page and contents written
 // to swap disk are correct.
 //
@@ -409,6 +411,7 @@ vmtest9(int nargs, char **args)
 	// Choose a number large enough to exhaust memory when
 	// swap is disabled.
 	const unsigned test_pages = 4096;
+	paddr_t evicted_pages[EVICTIONS];
 
 	// Disable swapping while we exhaust memory.
 	old_swap_enabled = set_swap_enabled(0);
@@ -442,34 +445,39 @@ vmtest9(int nargs, char **args)
 	// Re-enable swapping.
 	set_swap_enabled(1);
 
-	// Evict a page.
-	result = evict_page(&paddr);
-	KASSERT(result == 0);
-	kvaddr = PADDR_TO_KVADDR(paddr);
+	for (int k = 0; k < EVICTIONS; k++) {
+        // Evict a page.
+        result = evict_page(&paddr);
+        KASSERT(result == 0);
+        kvaddr = PADDR_TO_KVADDR(paddr);
 
-	// Page should be zeroed out by eviction.
-	for (int i = 0; i < PAGE_SIZE; i++) {
-        KASSERT(((char *)kvaddr)[i] == 0);
+        // Page should be zeroed out by eviction.
+        for (int i = 0; i < PAGE_SIZE; i++) {
+            KASSERT(((char *)kvaddr)[i] == 0);
+        }
+
+        lock_acquire(as->pages_lock);
+        core_idx = paddr_to_core_idx(paddr);
+        vaddr = core_idx_to_vaddr[core_idx];	
+        pte = as_lookup_pte(as, vaddr);
+        KASSERT(pte != NULL);
+
+        // Page-in from swapdisk.
+        KASSERT(pte->status & VM_PTE_BACKED);
+        result = block_read(pte->block_index, paddr);
+        KASSERT(result == 0);
+        lock_release(as->pages_lock);
+
+        // Check unique test pattern has been restored.
+        p = *(unsigned *)PADDR_TO_KVADDR(paddr);
+        KASSERT(p == vaddr / 0x1000);
+		evicted_pages[k] = paddr;
 	}
 
-	lock_acquire(as->pages_lock);
-	core_idx = paddr_to_core_idx(paddr);
-	vaddr = core_idx_to_vaddr[core_idx];	
-	pte = as_lookup_pte(as, vaddr);
-	KASSERT(pte != NULL);
-
-	// Page-in from swapdisk.
-	KASSERT(pte->status & VM_PTE_BACKED);
-	result = block_read(pte->block_index, paddr);
-	KASSERT(result == 0);
-	lock_release(as->pages_lock);
-
-	// Check unique test pattern has been restored.
-	p = *(unsigned *)PADDR_TO_KVADDR(paddr);
-	KASSERT(p == vaddr / 0x1000);
-
     as_destroy(as);
-	free_pages(paddr);
+	for (int k = 0; k < EVICTIONS; k++) {
+		free_pages(evicted_pages[k]);
+	}
 	kfree(core_idx_to_vaddr);
 
 	kprintf_t("\n");
@@ -639,3 +647,100 @@ vmtest11(int nargs, char **args)
 	return 0;
 	
 }
+
+// Tests evict_page swaps out and get_page_via_table 
+// restores page.
+//
+int
+vmtest12(int nargs, char **args)
+{
+	struct addrspace *as;
+	vaddr_t kvaddr;
+	vaddr_t vaddr;
+	paddr_t paddr;
+	unsigned p;
+	struct pte *pte;
+	(void)nargs;
+	(void)args;
+	int result;
+	unsigned core_idx;
+	vaddr_t *core_idx_to_vaddr;
+	int old_swap_enabled;
+	// Choose a number large enough to exhaust memory when
+	// swap is disabled.
+	const unsigned test_pages = 4096;
+	paddr_t evicted_pages[EVICTIONS];
+
+	// Disable swapping while we exhaust memory.
+	old_swap_enabled = set_swap_enabled(0);
+	KASSERT(old_swap_enabled);
+
+	// Allocate large array dynamically so we don't overflow
+	// the small kernel stack.
+	core_idx_to_vaddr = kmalloc(sizeof(vaddr_t) * test_pages);
+	KASSERT(core_idx_to_vaddr != NULL);
+
+	// Create a test address space with some user pages.
+	as = as_create();
+    KASSERT(as != NULL);
+
+    // Exhaust memory.
+    for (p = 0; p < test_pages; p++) {
+		vaddr = 0x1000 * p;
+        pte = create_test_page(as, vaddr);
+		if (pte == NULL) {
+			break;
+		}
+		// Write a unique test pattern to each page.
+		*(unsigned *)PADDR_TO_KVADDR(pte->paddr) = p;
+		// Maintain our own coremap so we can find vaddr from paddr.
+		core_idx = paddr_to_core_idx(pte->paddr);
+		core_idx_to_vaddr[core_idx] = vaddr;
+	}
+	KASSERT(pte == NULL);
+	KASSERT(p > 0);
+
+	// Re-enable swapping.
+	set_swap_enabled(1);
+
+	for (int k = 0; k < EVICTIONS; k++) {
+        // Evict a page.
+        result = evict_page(&paddr);
+        KASSERT(result == 0);
+		evicted_pages[k] = paddr;
+        kvaddr = PADDR_TO_KVADDR(paddr);
+
+        // Page should be zeroed out by eviction.
+        for (int i = 0; i < PAGE_SIZE; i++) {
+            KASSERT(((char *)kvaddr)[i] == 0);
+        }
+	}
+
+	for (int k = 0; k < EVICTIONS; k++) {
+		// Restore page from swap.
+		paddr = evicted_pages[k];
+        core_idx = paddr_to_core_idx(paddr);
+        vaddr = core_idx_to_vaddr[core_idx];
+		result = get_page_via_table(as, vaddr);
+		KASSERT(result == 0);
+
+        // Check unique test pattern has been restored.
+		lock_acquire(as->pages_lock);
+		pte = as_lookup_pte(as, vaddr);
+		lock_release(as->pages_lock);
+		KASSERT(pte != NULL);
+        p = *(unsigned *)PADDR_TO_KVADDR(pte->paddr);
+        KASSERT(p == vaddr / 0x1000);
+	}
+
+    as_destroy(as);
+	for (int k = 0; k < EVICTIONS; k++) {
+		free_pages(evicted_pages[k]);
+	}
+	kfree(core_idx_to_vaddr);
+
+	kprintf_t("\n");
+	success(TEST161_SUCCESS, SECRET, "vm12");
+	return 0;
+}
+

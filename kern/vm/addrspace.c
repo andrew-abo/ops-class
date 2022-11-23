@@ -208,7 +208,7 @@ visit_page_table(void **pages, int level, vaddr_t vpn)
                 lock_acquire(pte->lock);
                 // TODO(aabo): Unify some page table walking functions to reduce 
                 // code duplication.
-                kprintf("v0x%08x -> p0x%08x: status=0x%x, block_index=%u, ref_count=%d\n", 
+                kprintf("v0x%08x -> p0x%08x: status=0x%x, block_index=%04u, ref_count=%02d\n", 
                   vaddr, pte->paddr, pte->status, pte->block_index, 
                 pte->ref_count);
                 lock_release(pte->lock);
