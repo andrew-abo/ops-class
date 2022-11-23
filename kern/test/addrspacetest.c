@@ -503,21 +503,59 @@ addrspacetest11(int nargs, char **args)
 	return 0;
 }
 
+// Tests as_create_pte and as_destroy_pte.
+//
 int
 addrspacetest12(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
-    // TODO(aabo): remove
-    // write unit tests for as_*_pte.
+
+    struct pte *pte;
+
+    pte = as_create_pte();
+    KASSERT(pte != NULL);
+    lock_acquire(pte->lock);
+    KASSERT(pte->ref_count == 1);
+    lock_release(pte->lock);
+    as_destroy_pte(pte);
+
+	success(TEST161_SUCCESS, SECRET, "as12");
     return 0;
 }
 
+// Tests as_insert_pte.
+//
 int
 addrspacetest13(int nargs, char **args)
 {
     (void)nargs;
     (void)args;
-    // TODO(aabo): remove
+    struct addrspace *as;
+    struct pte *pte;
+    struct pte *old_pte;
+    paddr_t paddr = 0x1234abcd;
+    vaddr_t vaddr = 0x5000;
+    int result;
+
+    as = as_create();
+    KASSERT(as != NULL);
+
+    pte = as_create_pte();
+    KASSERT(pte != NULL);
+    pte->paddr = paddr;
+
+    lock_acquire(as->pages_lock);
+    result = as_insert_pte(as, vaddr, pte, &old_pte);
+    KASSERT(result == 0);
+    KASSERT(old_pte == NULL);
+    pte = as_lookup_pte(as, vaddr);
+    KASSERT(pte->paddr == paddr);
+    lock_release(as->pages_lock);
+
+    dump_page_table(as);
+    as_destroy(as);
+
+	success(TEST161_SUCCESS, SECRET, "as13");
 	return 0;
 }
