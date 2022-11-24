@@ -9,6 +9,7 @@ sys161:
   ram: 2M
 monitor:
   progresstimeout: 15.0
+  commandtimeout: 100.0
 ---
 khu
 $ /testbin/sbrktest 1

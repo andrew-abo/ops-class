@@ -719,11 +719,8 @@ as_destroy_vaddr(struct addrspace *as, vaddr_t vaddr)
 		lock_release(as->pages_lock);
 		return;
 	}
-	lock_acquire(pte->lock);
-	if (pte->ref_count == 1) {
-		leaf_pages[idx] = NULL;
-	}
-	lock_release(pte->lock);
+	// Detach page table entry from this addrspace.
+	leaf_pages[idx] = NULL;
 	as_destroy_page(pte);
 	lock_release(as->pages_lock);
 }
