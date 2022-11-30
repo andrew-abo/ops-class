@@ -198,6 +198,45 @@ free_swapmap_block(int block_index)
 }
 
 /*
+ * Prints contents of swapmap.
+ */
+void dump_swapmap()
+{
+	const unsigned block_max = 512;
+	lock_acquire(swapmap_lock);
+	for (unsigned i = 0; i < block_max; i++) {
+		if (i % 64 == 0) {
+			kprintf("\n");
+			kprintf("0x%04x ", i);
+		}
+		if (bitmap_isset(swapmap, i)) {
+			kprintf("*");
+		} else {
+			kprintf(".");
+		}
+		if ((i+1) % 16 == 0) {
+			kprintf(" ");
+		}
+	}
+	kprintf("\n");
+	lock_release(swapmap_lock);
+}
+
+/*
+ * Returns 1 if block_index is occupied else 0.
+ */
+int
+swapmap_isset(int block_index)
+{
+    int status;
+
+	lock_acquire(swapmap_lock);
+	status = bitmap_isset(swapmap, block_index);
+	lock_release(swapmap_lock);
+	return status ? 1 : 0;
+}
+
+/*
  * Returns number of used pages on swap disk.
  */
 size_t
@@ -282,12 +321,23 @@ vaddr_t
 vm_get_vaddr(paddr_t paddr)
 {
     unsigned p;
-    vaddr_t vaddr;
 
 	KASSERT(spinlock_do_i_hold(&coremap_lock));
 	p = paddr_to_core_idx(paddr);
-	vaddr = coremap[p].vaddr;
-	return vaddr;
+	return coremap[p].vaddr;
+}
+
+/*
+ * Returns pte mapped to paddr.
+ */
+struct pte
+*vm_get_pte(paddr_t paddr)
+{
+    unsigned p;
+
+	KASSERT(spinlock_do_i_hold(&coremap_lock));
+	p = paddr_to_core_idx(paddr);
+	return coremap[p].pte;
 }
 
 /*
@@ -731,8 +781,8 @@ save_page(struct pte *pte, int dirty) {
 			lock_release(swapmap_lock);
 			return result;
 		}
-        lock_release(swapmap_lock);
         pte->block_index = block_index;
+        lock_release(swapmap_lock);
 	}
 	if (dirty || !(pte->status & VM_PTE_BACKED)) {
         result = block_write(pte->block_index, pte->paddr);
@@ -1344,6 +1394,9 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	// and restore if it was previously swapped out.
 	result = restore_page(as, pte, faultaddress);
 	lock_release(pte->lock);
+
+	//TODO(aabo): remove
+	//as_validate_page_table(as);
 	return result;
 }
 
@@ -1371,11 +1424,16 @@ handle_write_fault(struct addrspace *as, vaddr_t faultaddress)
 		if (copy == NULL) {
 			return ENOMEM;
 		}
+		// Temporarily clone the original pte.
 		copy->status = pte->status;
 		copy->paddr = pte->paddr;
 		copy->block_index = pte->block_index;
 		lock_acquire(copy->lock);
+		// Copy contents from memory or swap as appropriate.
         result = restore_page(as, copy, faultaddress);
+		// Copy is not backed.
+		copy->block_index = 0;
+		copy->status &= ~VM_PTE_BACKED;
 		lock_release(copy->lock);
         if (result) {
 			as_destroy_pte(copy);
@@ -1463,6 +1521,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	if (!as_operation_is_valid(as, faultaddress, read_request)) {
 		return EFAULT;
 	}
+	
 	faultaddress &= PAGE_FRAME;
 	// All TLB entries are initially read-only (TLB "dirty=0").
 	// We detect valid writes as VM_FAULT_READONLY (not a permission fault).

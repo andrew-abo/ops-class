@@ -50,7 +50,6 @@
 #define VM_CORE_USED 0x10000  // Page is allocated and in use.
 #define VM_CORE_ACCESSED 0x20000  // Page has been accessed since last eviction sweep.
 #define VM_CORE_DIRTY 0x40000  // Page in memory differs from page on disk.
-#define VM_CORE_SHARED 0x80000  // Page is shared between addrspaces.
 #define VM_CORE_NPAGES 0xffff  // Mask for number of contiguous pages in this allocation
                             // starting at current index.
 
@@ -61,8 +60,6 @@ struct core_page {
                           // status & VM_CORE_SHARED != 0. 'as' is not
                           // meaningful when multiple addrspaces share
                           // a page.
-    struct addrspace *as;  // Pointer to address space this page belongs to.
-                           // NULL if owned by kernel or shared page. 
     unsigned prev;  // Index of previous block in coremap.
 };
 
@@ -88,6 +85,8 @@ void free_swapmap_block(int block_index);
 size_t swap_used_pages(void);
 int save_page(struct pte *pte, int dirty);
 int restore_page(struct addrspace *as, struct pte *pte, vaddr_t vaddr);
+int swapmap_isset(int block_index);
+void dump_swapmap(void);
 
 /* Fault handling function called by trap code */
 int handle_write_fault(struct addrspace *as, vaddr_t faultaddress);
@@ -109,7 +108,7 @@ paddr_t core_idx_to_paddr(unsigned p);
 paddr_t coremap_assign_to_kernel(unsigned p, unsigned npages);
 unsigned coremap_assign_vaddr(paddr_t paddr, struct pte *pte, vaddr_t vaddr);
 
-struct addrspace *vm_get_as(paddr_t paddr);
+struct pte *vm_get_pte(paddr_t paddr);
 vaddr_t vm_get_vaddr(paddr_t paddr);
 void spinlock_acquire_coremap(void);
 void spinlock_release_coremap(void);

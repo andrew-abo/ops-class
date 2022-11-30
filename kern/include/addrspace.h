@@ -198,6 +198,6 @@ void as_destroy_vaddr(struct addrspace *as, vaddr_t vaddr);
 void dump_page_table(struct addrspace *as);
 void dump_segments(struct addrspace *as);
 void as_destroy_page(struct pte *pte);
-int as_validate_page_table(struct addrspace *as);
+void as_validate_page_table(struct addrspace *as);
 
 #endif /* _ADDRSPACE_H_ */

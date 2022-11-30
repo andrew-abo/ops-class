@@ -131,9 +131,9 @@ copy_page_table(struct addrspace *dst,
 			KASSERT(dst_pte == NULL);
 			lock_acquire(src_pte->lock);
 			src_pte->ref_count++;
-			lock_release(src_pte->lock);
 			// Reactivate write detection.
 			vm_tlb_remove(vaddr);			
+			lock_release(src_pte->lock);
 			continue;
         }
 		result = copy_page_table(dst, src, next_pages, next_level, next_vpn);
@@ -186,7 +186,7 @@ as_copy(struct addrspace *src, struct addrspace **ret)
 // Visits each page table entry using recursive depth-first traversal
 // of page table
 static void
-visit_page_table(void **pages, int level, vaddr_t vpn) 
+visit_page_table(void **pages, int level, vaddr_t vpn, int dump) 
 {
 	struct pte *pte;
 	const char *tab[] = {"", "     ", "          ", "               "};
@@ -201,16 +201,29 @@ visit_page_table(void **pages, int level, vaddr_t vpn)
 			vaddr = next_vpn << PAGE_OFFSET_BITS;
 			leaf_pages = (struct pte **)pages;
 			pte = leaf_pages[idx];
-			kprintf("%s[%2d] ", tab[level], idx);
+			if (dump) {
+			  kprintf("%s[0x%02x] ", tab[level], idx);
+			}
 			if (pte == NULL) {
-				kprintf("NULL\n");
+				if (dump) {
+				  kprintf("NULL\n");
+				}
 			} else {
                 lock_acquire(pte->lock);
-                // TODO(aabo): Unify some page table walking functions to reduce 
-                // code duplication.
-                kprintf("v0x%08x -> p0x%08x: status=0x%x, block_index=%04u, ref_count=%02d\n", 
-                  vaddr, pte->paddr, pte->status, pte->block_index, 
-                pte->ref_count);
+                if (dump) {
+                  kprintf("v0x%08x -> p0x%08x: status=0x%x, block_index=0x%04x, ref_count=%02d\n", 
+                    vaddr, pte->paddr, pte->status, pte->block_index, 
+                    pte->ref_count);
+				}
+				if (pte->status & VM_PTE_VALID) {
+					spinlock_acquire_coremap();
+                    KASSERT(vm_get_vaddr(pte->paddr) == vaddr);
+					KASSERT(vm_get_pte(pte->paddr) == pte);
+					spinlock_release_coremap();
+                }
+				if (pte->status & VM_PTE_BACKED) {
+                    KASSERT(swapmap_isset(pte->block_index));
+				}
                 lock_release(pte->lock);
 			}
 			continue;
@@ -219,8 +232,10 @@ visit_page_table(void **pages, int level, vaddr_t vpn)
         if (next_pages == NULL) {
 			continue;
 		}
-		kprintf("%s[%2d]-v\n", tab[level], idx);
-		visit_page_table(next_pages, next_level, next_vpn);
+		if (dump) {
+		  kprintf("%s[0x%02x]-v\n", tab[level], idx);
+		}
+		visit_page_table(next_pages, next_level, next_vpn, dump);
 	}
 }
 
@@ -232,65 +247,21 @@ void
 dump_page_table(struct addrspace *as)
 {
 	lock_acquire(as->pages_lock);
-    visit_page_table(as->pages0, 0, 0x0);
+    visit_page_table(as->pages0, /*level=*/0, /*vpn=*/0x0, /*dump=*/1);
 	lock_release(as->pages_lock);
 }
 
 /*
- * Helper function for as_validate_page_table.
- *
- * Args:
- *   as: Pointer to address space to validate.
- *   pages: Pointer to page table.
- *   level: Current level of table to traverse starting at 0.
- *   vpn: Virtual page number (no page offset bits) .
+ * Descend multi-level page table belonging to address space as 
+ * and validate contents.
  */
-/*
-static void
-validate_page_table(struct addrspace *as, void **pages, int level, vaddr_t vpn) 
-{
-	struct pte *pte;
-	vaddr_t vaddr, next_vpn;
-	void **next_pages;
-
-	int next_level = level + 1;
-	for (int idx = 0; idx < 1 << VPN_BITS_PER_LEVEL; idx++) {
-		next_vpn = (vpn << VPN_BITS_PER_LEVEL) | idx;
-		if (level == PT_LEVELS - 1) {
-			vaddr = next_vpn << PAGE_OFFSET_BITS;
-			pte = ((struct pte *)pages) + idx;
-			if (pte->status & VM_PTE_VALID) {
-                KASSERT(vm_get_as(pte->paddr) == as);
-                KASSERT(vm_get_vaddr(pte->paddr) == vaddr);
-			}
-			continue;
-        }
-		next_pages = pages[idx];
-        if (next_pages == NULL) {
-			continue;
-		}
-		validate_page_table(as, next_pages, next_level, next_vpn);
-	}
-}
-*/
-
-/*
- * Validates page table is consistent with address space and coremap.
- *
- * Caller is responsible for locking page table.
- *
- * Returns:
- *   0 if valid, else panics.
- */
-/*
-int
+void
 as_validate_page_table(struct addrspace *as)
 {
-	KASSERT(lock_do_i_hold(as->pages_lock));
-	validate_page_table(as, as->pages0, 0, 0x0);
-    return 0;
+	lock_acquire(as->pages_lock);
+    visit_page_table(as->pages0, /*level=*/0, /*vpn=*/0x0, /*dump=*/0);
+	lock_release(as->pages_lock);
 }
-*/
 
 void
 as_activate(void)
@@ -689,12 +660,14 @@ as_destroy_page(struct pte *pte)
 		lock_release(pte->lock);
         return;
 	}
+	KASSERT(pte->ref_count == 0);
     if (pte->status & VM_PTE_VALID) {
         free_pages(pte->paddr);
     }
     if (pte->status & VM_PTE_BACKED) {
         free_swapmap_block(pte->block_index);
     }
+	pte->status = 0;
 	lock_release(pte->lock);
 	as_destroy_pte(pte);
 }
@@ -754,6 +727,7 @@ destroy_page_table(void **pages, int level)
 			continue;
         }
 		destroy_page_table(pages[idx], next_level);
+		pages[idx] = NULL;
 	}
 	if (level > 0) {
         kfree(pages);
@@ -768,9 +742,6 @@ void
 as_destroy(struct addrspace *as)
 {
 	KASSERT(as != NULL);
-
-	// Follow VM locking order to avoid another process trying to evict pages
-	// from the addrspace we are destroying.
 
 	lock_acquire(as->pages_lock);
 	destroy_page_table(as->pages0, 0);
