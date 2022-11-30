@@ -1395,8 +1395,6 @@ get_page_via_table(struct addrspace *as, vaddr_t faultaddress)
 	result = restore_page(as, pte, faultaddress);
 	lock_release(pte->lock);
 
-	//TODO(aabo): remove
-	//as_validate_page_table(as);
 	return result;
 }
 
