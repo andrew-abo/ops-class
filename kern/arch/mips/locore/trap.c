@@ -313,10 +313,10 @@ mips_trap(struct trapframe *tf)
 	 */
 	switch (result) {
     case ENOMEM:
-    kprintf("Kernel mode out of memory.\n");
+    kprintf("mips_trap: vm_fault returned ENOMEM in kernel mode.\n");
     break;
     case EFAULT:
-    kprintf("Kernel mode segmentation fault.\n");
+    kprintf("mips_trap: vm_fault returned EFAULT in kernel mode.\n");
     }
   
 	kprintf("panic: Fatal exception %u (%s) in kernel mode\n", code,

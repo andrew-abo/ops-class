@@ -117,8 +117,9 @@ struct thread {
 	/*
 	 * Public fields
 	 */
-
-	/* add more here as needed */
+	 /* Tracks when shootdown requests finish */	
+	 struct semaphore *t_tlbshootdown_sem;
+	
 };
 
 int trapframe_save(struct trapframe **tf_dst_ptr, const struct trapframe *tf_src);

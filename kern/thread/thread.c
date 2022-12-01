@@ -152,6 +152,10 @@ thread_create(const char *name)
 	thread->t_iplhigh_count = 1; /* corresponding to t_curspl */
 
 	/* If you add to struct thread, be sure to initialize here */
+	thread->t_tlbshootdown_sem = sem_create("t_tlbshootdown_sem", 0);
+	if (thread->t_tlbshootdown_sem == NULL) {
+		panic("thread_create: Cannot create t_tlbshootdown_sem");
+	}
 
 	return thread;
 }
@@ -281,9 +285,11 @@ thread_destroy(struct thread *thread)
 	}
 	threadlistnode_cleanup(&thread->t_listnode);
 	thread_machdep_cleanup(&thread->t_machdep);
+	sem_destroy(thread->t_tlbshootdown_sem);
 
 	/* sheer paranoia */
 	thread->t_wchan_name = "DESTROYED";
+
 
 	kfree(thread);
 }

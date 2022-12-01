@@ -71,9 +71,6 @@ static struct lock *swapdisk_lock;
 static size_t swapdisk_pages;
 static int swap_enabled = 0;  // Swap is only enabled if swap disk is found.
 
-// Tracks when TLB shootdowns complete.
-static struct semaphore *tlbshootdown_sem;
-
 #if OPT_VM_PERF
 static unsigned tlb_faults = 0;
 static unsigned swap_ins = 0;
@@ -550,10 +547,6 @@ vm_bootstrap(void)
 	}
 	kprintf("Total swapdisk pages %u\n", swapdisk_pages);
 
-	tlbshootdown_sem = sem_create("tlbshootdown", 0);
-	if (tlbshootdown_sem == NULL) {
-        panic("vm_bootstrap: Could not create tlbshootdown_sem");
-    }
 #if OPT_VM_PERF
     init_vm_perf();
 #endif
@@ -833,8 +826,9 @@ evict_page(paddr_t *paddr)
 	}
 	spinlock_release(&coremap_lock);
 
-	lock_acquire(old_core.pte->lock);
 	if (old_core.status & VM_CORE_USED) {
+		KASSERT(old_core.pte != NULL);
+        lock_acquire(old_core.pte->lock);
 #if OPT_VM_PERF
         count_eviction();
 #endif
@@ -845,7 +839,7 @@ evict_page(paddr_t *paddr)
         // Once removed from TLB, any page faults will block
 		// waiting for old_core.pte->lock until we are done.
         shootdown.vaddr = old_core.vaddr;
-		shootdown.sem = tlbshootdown_sem;
+		shootdown.sem = curthread->t_tlbshootdown_sem;
 		vm_tlb_remove(old_core.vaddr);
 		ipi_broadcast_tlbshootdown(&shootdown);
 		// Refresh page dirty status in case page was modified in the
@@ -861,8 +855,8 @@ evict_page(paddr_t *paddr)
 		}
         old_core.pte->status &= ~VM_PTE_VALID;
         old_core.pte->paddr = (paddr_t)NULL;
+        lock_release(old_core.pte->lock);
 	}
-	lock_release(old_core.pte->lock);
 	kvaddr = PADDR_TO_KVADDR(*paddr);
 	bzero((void *)kvaddr, PAGE_SIZE);
 	return 0;
