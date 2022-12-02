@@ -77,6 +77,7 @@ static unsigned swap_ins = 0;
 static unsigned swap_outs = 0;
 static unsigned faults = 0;
 static unsigned evictions = 0;
+static unsigned peak_used_bytes = 0;
 
 static struct spinlock vm_perf_lock;
 
@@ -92,6 +93,7 @@ void reset_vm_perf() {
 	swap_outs = 0;
 	faults = 0;
 	evictions = 0;
+	peak_used_bytes = 0;
 	spinlock_release(&vm_perf_lock);
 }
 
@@ -132,6 +134,7 @@ void dump_vm_perf() {
 	kprintf("swap_outs  = %8d\n", swap_outs);
 	kprintf("evictions  = %8d\n", evictions);
 	kprintf("faults     = %8d\n", faults);
+	kprintf("peak_used_bytes = 0x%8x\n", peak_used_bytes);
 	spinlock_release(&vm_perf_lock);
 }
 #endif
@@ -1013,6 +1016,11 @@ alloc_pages(unsigned npages)
 	} 
 	// Not an eviction, so more memory consumed.
     used_bytes += npages * PAGE_SIZE;
+#if OPT_VM_PERF
+    if (used_bytes > peak_used_bytes) {
+		peak_used_bytes = used_bytes;
+	}
+#endif
 	paddr = coremap_assign_to_kernel(p, npages);
 	kvaddr = PADDR_TO_KVADDR(paddr);
 	bzero((void *)kvaddr, npages * PAGE_SIZE);
