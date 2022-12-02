@@ -134,7 +134,7 @@ void dump_vm_perf() {
 	kprintf("swap_outs  = %8d\n", swap_outs);
 	kprintf("evictions  = %8d\n", evictions);
 	kprintf("faults     = %8d\n", faults);
-	kprintf("peak_used_bytes = 0x%8x\n", peak_used_bytes);
+	kprintf("peak_used_bytes = 0x%x\n", peak_used_bytes);
 	spinlock_release(&vm_perf_lock);
 }
 #endif
