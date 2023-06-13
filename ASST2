@@ -1,0 +1,36 @@
+Test                                  Result       Memory Leaks        Score
+-----------------------------------   ----------   ------------   ----------
+boot.t                                correct               ---          0/0
+syscalls/consoletest.t                correct              None        20/20
+syscalls/shell.t                      correct              None        10/10
+syscalls/forktest.t                   correct              None        15/15
+syscalls/opentest.t                   correct              None          5/5
+stability/badcall/badcall-waitpid.t   correct               ---          1/1
+stability/badcall/badcall-open.t      correct              None          1/1
+syscalls/sparsefile.t                 correct              None          5/5
+stability/badcall/badcall-close.t     correct              None          1/1
+stability/badcall/badcall-execv.t     correct              None          1/1
+stability/randcall.t                  incorrect            None          0/4
+stability/badcall/badcall-read.t      correct              None          1/1
+stability/forktest-stability.t        correct              None        10/10
+syscalls/redirect.t                   correct              None        10/10
+syscalls/bigexec.t                    correct              None          8/8
+syscalls/add.t                        correct               ---          4/4
+stability/badcall/badcall-dup2.t      correct              None          1/1
+syscalls/factorial.t                  correct               ---          5/5
+syscalls/argtest.t                    correct              None          5/5
+stability/badcall/badcall-write.t     correct              None          1/1
+syscalls/fileonlytest.t               correct              None        12/12
+stability/crash/crash-allS.t          correct              None          4/4
+syscalls/readwritetest.t              correct              None        10/10
+stability/badcall/badcall-lseek.t     correct              None          1/1
+syscalls/closetest.t                  correct              None          5/5
+stability/forkbomb.t                  correct               ---        10/10
+
+Total Correct  : 25/26
+Total Incorrect: 1/26
+
+asst2.1 Score  : 20/20
+asst2.2 Score  : 126/130
+(asst2) Score  : 146/150
+

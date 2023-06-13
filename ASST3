@@ -1,0 +1,46 @@
+Test                             Result       Memory Leaks        Score
+------------------------------   ----------   ------------   ----------
+boot.t                           correct               ---          0/0
+coremap/not-dumbvm.t             correct              None        15/15
+syscalls/consoletest.t           correct              None          0/0
+vm/not-dumbvm-vm.t               correct              None          5/5
+vm/matmult.t                     correct              None          5/5
+vm/sort.t                        correct              None          5/5
+syscalls/forktest.t              correct              None          0/0
+syscalls/shell.t                 correct              None          0/0
+vm/swap/matmult.t                correct              None        20/20
+vm/quinthuge.t                   correct              None        10/10
+vm/swap/sort.t                   correct              None        20/20
+vm/parallelvm.t                  correct              None        10/10
+vm/quintsort.t                   correct              None        10/10
+vm/bigfork.t                     correct              None        10/10
+vm/quintmat.t                    correct              None        10/10
+vm/zero.t                        correct               ---          5/5
+vm/sbrk-badcall.t                correct               ---          2/2
+vm/swap/quinthuge.t              correct              None        10/10
+coremap/coremap-loose.t          correct              None          5/5
+vm/ctest.t                       correct              None          5/5
+vm/sbrktest.t                    correct              None          8/8
+vm/swap/parallelvm.t             correct               ---        10/10
+vm/swap/quintsort.t              correct              None        10/10
+coremap/km2.t                    correct              None          5/5
+coremap/km3.t                    correct              None          5/5
+coremap/km4.t                    correct              None        15/15
+vm/swap/parallelvm-32.t          correct               ---        15/15
+vm/swap/bigfork.t                correct              None        10/10
+vm/stability/forkbomb.t          correct               ---          5/5
+vm/palin.t                       correct              None          5/5
+coremap/coremap-tight.t          correct              None        10/10
+vm/swap/bigfork-32.t             correct              None        15/15
+vm/stacktest.t                   correct               ---          5/5
+vm/swap/quintmat.t               correct              None        10/10
+vm/stability/vm-stability.t      correct              None        20/20
+coremap/km1.t                    correct              None          5/5
+
+Total Correct  : 36/36
+
+asst3.1 Score  : 60/60
+asst3.2 Score  : 120/120
+asst3.3 Score  : 120/120
+(asst3) Score  : 300/300
+
