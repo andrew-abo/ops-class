@@ -2,11 +2,13 @@
 
 OS161: Operating System Design and Implementation
 
+<img src="os161_logo.jpg" width="100">
+
 [ops-class.org](https://ops-class.org/)
 
 Implemented in C
 
-* ASST1: Synchronization primitive implementation
+* ASST1: Synchronization primitives implementation
   * spinlock
   * sleep lock
   * condition variable
